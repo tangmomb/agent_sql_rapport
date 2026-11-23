@@ -1,0 +1,186 @@
+{
+  "01-ca-livre": {
+    "columns": ["ca_articles_brl"],
+    "rows": [[5962902.01]],
+    "naive_rows": [[6155806.98]]
+  },
+  "02-paiements-sans-articles": {
+    "columns": ["montant_paye_brl"],
+    "rows": [[6922900.24]],
+    "naive_rows": [[8873231.96]]
+  },
+  "03-articles-avec-paiement": {
+    "columns": ["prix_articles_brl"],
+    "rows": [[203239.32]],
+    "naive_rows": [[510876.75]]
+  },
+  "04-poids-avis": {
+    "columns": ["note_moyenne"],
+    "rows": [[4.1743]],
+    "naive_rows": [[4.1738]]
+  },
+  "05-delai-dates-manquantes": {
+    "columns": ["delai_moyen_jours"],
+    "rows": [[12.5582]],
+    "naive_rows": [[12.5572]]
+  },
+  "06-multivendeurs": {
+    "columns": ["commandes_multivendeurs"],
+    "rows": [[794]],
+    "naive_rows": [[5249]]
+  },
+  "07-acheteurs-uniques": {
+    "columns": ["acheteurs_distincts"],
+    "rows": [[5936]],
+    "naive_rows": [[6123]]
+  },
+  "08-couverture-avis": {
+    "columns": ["pourcentage_avec_avis"],
+    "rows": [[99.2447]],
+    "naive_rows": [[99.9747]]
+  },
+  "09-geolocalisation-unique": {
+    "columns": ["fiches_clients"],
+    "rows": [[81]],
+    "naive_rows": [[7649]]
+  },
+  "10-categorie-non-traduite": {
+    "columns": ["produits_sans_traduction"],
+    "rows": [[13]],
+    "naive_rows": [[0]]
+  },
+  "11-retard-jour-civil": {
+    "columns": ["commandes_en_retard"],
+    "rows": [[2453]],
+    "naive_rows": [[2878]]
+  },
+  "12-annee-livraison": {
+    "columns": ["livraisons_2017"],
+    "rows": [[40930]],
+    "naive_rows": [[43426]]
+  },
+  "13-port-multipaiements": {
+    "columns": ["frais_port_brl"],
+    "rows": [[34223.49]],
+    "naive_rows": [[85022.24]]
+  },
+  "14-acheteurs-recurrents": {
+    "columns": ["acheteurs_recurrents"],
+    "rows": [[2801]],
+    "naive_rows": [[11610]]
+  },
+  "15-commandes-total": {
+    "columns": ["commandes"],
+    "rows": [[99441]]
+  },
+  "16-repartition-statuts": {
+    "columns": ["statut", "commandes"],
+    "rows": [
+      ["delivered", 96478],
+      ["shipped", 1107],
+      ["canceled", 625],
+      ["unavailable", 609],
+      ["invoiced", 314],
+      ["processing", 301],
+      ["created", 5],
+      ["approved", 2]
+    ]
+  },
+  "17-achats-mensuels": {
+    "columns": ["mois", "commandes"],
+    "rows": [
+      ["2017-01", 800],
+      ["2017-02", 1780],
+      ["2017-03", 2682],
+      ["2017-04", 2404],
+      ["2017-05", 3700],
+      ["2017-06", 3245],
+      ["2017-07", 4026],
+      ["2017-08", 4331],
+      ["2017-09", 4285],
+      ["2017-10", 4631],
+      ["2017-11", 7544],
+      ["2017-12", 5673]
+    ]
+  },
+  "18-etats-vendeurs": {
+    "columns": ["etat", "vendeurs"],
+    "rows": [
+      ["SP", 1849],
+      ["PR", 349],
+      ["MG", 244],
+      ["SC", 190],
+      ["RJ", 171]
+    ]
+  },
+  "19-poids-manquant": {
+    "columns": ["produits_sans_poids"],
+    "rows": [[2]]
+  },
+  "20-distribution-notes": {
+    "columns": ["note", "avis"],
+    "rows": [
+      [1, 11424],
+      [2, 3151],
+      [3, 8179],
+      [4, 19142],
+      [5, 57328]
+    ]
+  },
+  "21-remise-au-transporteur": {
+    "columns": ["delai_moyen_jours"],
+    "rows": [[2.859]]
+  },
+  "22-lignes-types-paiement": {
+    "columns": ["type_paiement", "lignes"],
+    "rows": [
+      ["credit_card", 76795],
+      ["boleto", 19784],
+      ["voucher", 5775],
+      ["debit_card", 1529],
+      ["not_defined", 3]
+    ]
+  },
+  "23-montant-vouchers": {
+    "columns": ["montant_vouchers_brl"],
+    "rows": [[379436.87]]
+  },
+  "24-echeances-carte": {
+    "columns": ["echeances_moyennes"],
+    "rows": [[3.749]]
+  },
+  "25-periode-observee": {
+    "columns": ["premier_jour", "dernier_jour", "jours_avec_achat"],
+    "rows": [["2016-09-04", "2018-10-17", 634]]
+  },
+  "26-categories-articles": {
+    "columns": ["categorie", "articles"],
+    "rows": [
+      ["health_beauty", 5841],
+      ["bed_bath_table", 5810],
+      ["computers_accessories", 4622],
+      ["sports_leisure", 4436],
+      ["furniture_decor", 4051]
+    ]
+  },
+  "27-mediane-delai": {
+    "columns": ["delai_median_jours"],
+    "rows": [[10.158]]
+  },
+  "28-part-livree": {
+    "columns": ["pourcentage_livre"],
+    "rows": [[96.29]]
+  },
+  "29-couverture-vendeurs": {
+    "columns": ["etats_distincts", "vendeurs"],
+    "rows": [[23, 3095]]
+  },
+  "30-produits-par-trimestre": {
+    "columns": ["trimestre", "articles", "produits_distincts"],
+    "rows": [
+      [1, 23572, 8990],
+      [2, 22647, 9548],
+      [3, 14105, 7354]
+    ]
+  }
+}

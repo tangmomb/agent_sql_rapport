@@ -1,0 +1,434 @@
+# Les colonnes attendues et les valeurs gelées sont dans expected.json.
+
+[[case]]
+id = "01-ca-livre"
+question = "En BRL, quel est le chiffre d'affaires des articles hors port des commandes passées en 2017 au statut delivered ? Arrondis au centime."
+trap = "Inclure les autres statuts gonfle le chiffre d'affaires des commandes livrées."
+sql = """
+SELECT ROUND(SUM(i.price), 2) AS ca_articles_brl
+FROM orders AS o JOIN order_items AS i USING (order_id)
+WHERE o.order_status = 'delivered'
+  AND o.order_purchase_timestamp >= '2017-01-01' AND o.order_purchase_timestamp < '2018-01-01'
+"""
+naive_sql = """
+SELECT ROUND(SUM(i.price), 2)
+FROM orders AS o JOIN order_items AS i USING (order_id)
+WHERE o.order_purchase_timestamp >= '2017-01-01' AND o.order_purchase_timestamp < '2018-01-01'
+"""
+
+[[case]]
+id = "02-paiements-sans-articles"
+question = "Quel montant total en BRL a été payé pour les commandes livrées passées en 2017 ? Compte chaque ligne de paiement une fois et arrondis au centime."
+trap = "Joindre directement les articles répète les paiements des commandes multiarticles."
+sql = """
+SELECT ROUND(SUM(p.payment_value), 2) AS montant_paye_brl
+FROM orders AS o JOIN order_payments AS p USING (order_id)
+WHERE o.order_status = 'delivered'
+  AND o.order_purchase_timestamp >= '2017-01-01' AND o.order_purchase_timestamp < '2018-01-01'
+"""
+naive_sql = """
+SELECT ROUND(SUM(p.payment_value), 2)
+FROM orders AS o JOIN order_payments AS p USING (order_id)
+JOIN order_items AS i USING (order_id)
+WHERE o.order_status = 'delivered'
+  AND o.order_purchase_timestamp >= '2017-01-01' AND o.order_purchase_timestamp < '2018-01-01'
+"""
+
+[[case]]
+id = "03-articles-avec-paiement"
+question = "Pour les commandes livrées passées en 2017 avec au moins deux lignes de paiement enregistrées, calcule le total des prix des articles hors port en BRL, arrondi au centime."
+trap = "Filtrer par une jointure simple vers les paiements répète les prix des articles."
+sql = """
+SELECT ROUND(SUM(i.price), 2) AS prix_articles_brl
+FROM orders AS o JOIN order_items AS i USING (order_id)
+WHERE o.order_status = 'delivered'
+  AND o.order_purchase_timestamp >= '2017-01-01' AND o.order_purchase_timestamp < '2018-01-01'
+  AND o.order_id IN (SELECT order_id FROM order_payments GROUP BY order_id HAVING COUNT(*) >= 2)
+"""
+naive_sql = """
+SELECT ROUND(SUM(i.price), 2)
+FROM orders AS o JOIN order_items AS i USING (order_id)
+JOIN order_payments AS p USING (order_id)
+WHERE o.order_status = 'delivered'
+  AND o.order_purchase_timestamp >= '2017-01-01' AND o.order_purchase_timestamp < '2018-01-01'
+  AND o.order_id IN (SELECT order_id FROM order_payments GROUP BY order_id HAVING COUNT(*) >= 2)
+"""
+
+[[case]]
+id = "04-poids-avis"
+question = "Parmi les commandes livrées passées en 2017 avec au moins un avis, quelle est la note moyenne à quatre décimales ? Moyenne d'abord les avis d'une même commande, puis donne le même poids à chaque commande."
+trap = "Moyenner directement les avis donne plus de poids aux commandes ayant plusieurs avis."
+sql = """
+WITH notes AS (
+    SELECT o.order_id, AVG(r.review_score) AS note
+    FROM orders AS o JOIN order_reviews AS r USING (order_id)
+    WHERE o.order_status = 'delivered'
+      AND o.order_purchase_timestamp >= '2017-01-01' AND o.order_purchase_timestamp < '2018-01-01'
+    GROUP BY o.order_id
+)
+SELECT ROUND(AVG(note), 4) AS note_moyenne FROM notes
+"""
+naive_sql = """
+SELECT ROUND(AVG(r.review_score), 4)
+FROM orders AS o JOIN order_reviews AS r USING (order_id)
+WHERE o.order_status = 'delivered'
+  AND o.order_purchase_timestamp >= '2017-01-01' AND o.order_purchase_timestamp < '2018-01-01'
+"""
+
+[[case]]
+id = "05-delai-dates-manquantes"
+question = "Tous millésimes confondus, quel est le délai moyen réel en jours entre achat et livraison client parmi les commandes au statut delivered avec date de livraison connue ? Arrondis à quatre décimales."
+trap = "Remplacer une date de livraison manquante par un délai nul abaisse la moyenne."
+sql = """
+SELECT ROUND(AVG(julianday(order_delivered_customer_date) - julianday(order_purchase_timestamp)), 4)
+       AS delai_moyen_jours
+FROM orders
+WHERE order_status = 'delivered' AND order_delivered_customer_date IS NOT NULL
+"""
+naive_sql = """
+SELECT ROUND(AVG(COALESCE(
+    julianday(order_delivered_customer_date) - julianday(order_purchase_timestamp), 0)), 4)
+FROM orders
+WHERE order_status = 'delivered'
+"""
+
+[[case]]
+id = "06-multivendeurs"
+question = "Combien de commandes livrées passées en 2018 contiennent des articles de plus d'un vendeur distinct ?"
+trap = "Plusieurs articles d'un même vendeur ne constituent pas une commande multivendeur."
+sql = """
+SELECT COUNT(*) AS commandes_multivendeurs
+FROM (
+    SELECT o.order_id
+    FROM orders AS o JOIN order_items AS i USING (order_id)
+    WHERE o.order_status = 'delivered'
+      AND o.order_purchase_timestamp >= '2018-01-01' AND o.order_purchase_timestamp < '2019-01-01'
+    GROUP BY o.order_id
+    HAVING COUNT(DISTINCT i.seller_id) > 1
+)
+"""
+naive_sql = """
+SELECT COUNT(*) FROM (
+    SELECT o.order_id
+    FROM orders AS o JOIN order_items AS i USING (order_id)
+    WHERE o.order_status = 'delivered'
+      AND o.order_purchase_timestamp >= '2018-01-01' AND o.order_purchase_timestamp < '2019-01-01'
+    GROUP BY o.order_id HAVING COUNT(*) > 1
+)
+"""
+
+[[case]]
+id = "07-acheteurs-uniques"
+question = "Combien d'acheteurs distincts de la ville sao paulo, État SP, ont passé au moins une commande livrée en 2017 ? L'année porte sur la date d'achat et la ville sur la fiche client de la commande."
+trap = "customer_id recense les fiches par commande ; customer_unique_id identifie l'acheteur."
+sql = """
+SELECT COUNT(DISTINCT c.customer_unique_id) AS acheteurs_distincts
+FROM orders AS o JOIN customers AS c USING (customer_id)
+WHERE c.customer_city = 'sao paulo' AND c.customer_state = 'SP'
+  AND o.order_status = 'delivered'
+  AND o.order_purchase_timestamp >= '2017-01-01' AND o.order_purchase_timestamp < '2018-01-01'
+"""
+naive_sql = """
+SELECT COUNT(DISTINCT c.customer_id)
+FROM orders AS o JOIN customers AS c USING (customer_id)
+WHERE c.customer_city = 'sao paulo' AND c.customer_state = 'SP'
+  AND o.order_status = 'delivered'
+  AND o.order_purchase_timestamp >= '2017-01-01' AND o.order_purchase_timestamp < '2018-01-01'
+"""
+
+[[case]]
+id = "08-couverture-avis"
+question = "Quel pourcentage des commandes livrées passées en 2017 a reçu au moins un avis ? Prends toutes les commandes livrées de cette cohorte comme dénominateur et arrondis à quatre décimales."
+trap = "Le nombre d'avis n'est pas le nombre de commandes ayant au moins un avis."
+sql = """
+SELECT ROUND(100.0 * SUM(EXISTS (
+    SELECT 1 FROM order_reviews AS r WHERE r.order_id = o.order_id
+)) / COUNT(*), 4) AS pourcentage_avec_avis
+FROM orders AS o
+WHERE o.order_status = 'delivered'
+  AND o.order_purchase_timestamp >= '2017-01-01' AND o.order_purchase_timestamp < '2018-01-01'
+"""
+naive_sql = """
+SELECT ROUND(100.0 * COUNT(r.review_id) / COUNT(DISTINCT o.order_id), 4)
+FROM orders AS o LEFT JOIN order_reviews AS r USING (order_id)
+WHERE o.order_status = 'delivered'
+  AND o.order_purchase_timestamp >= '2017-01-01' AND o.order_purchase_timestamp < '2018-01-01'
+"""
+
+[[case]]
+id = "09-geolocalisation-unique"
+question = "Dans la table customers, combien de fiches de l'État AC ont un préfixe postal présent au moins une fois dans geolocation ? Fais la correspondance sur le seul préfixe postal."
+trap = "Une jointure avec les coordonnées répète la fiche client pour chaque point géographique."
+sql = """
+SELECT COUNT(*) AS fiches_clients
+FROM customers AS c
+WHERE c.customer_state = 'AC' AND EXISTS (
+    SELECT 1 FROM geolocation AS g
+    WHERE g.geolocation_zip_code_prefix = c.customer_zip_code_prefix
+)
+"""
+naive_sql = """
+SELECT COUNT(*)
+FROM customers AS c JOIN geolocation AS g
+ON g.geolocation_zip_code_prefix = c.customer_zip_code_prefix
+WHERE c.customer_state = 'AC'
+"""
+
+[[case]]
+id = "10-categorie-non-traduite"
+question = "Combien de produits ont une catégorie nommée dans la source, mais aucune traduction anglaise dans la table de traduction ? Exclus les produits sans catégorie source."
+trap = "Une jointure interne supprime les catégories sans traduction."
+sql = """
+SELECT COUNT(*) AS produits_sans_traduction
+FROM products_en
+WHERE product_category_name IS NOT NULL AND product_category_name_english IS NULL
+"""
+naive_sql = """
+SELECT COUNT(*)
+FROM products AS p JOIN category_translation AS t USING (product_category_name)
+WHERE p.product_category_name IS NOT NULL AND t.product_category_name_english IS NULL
+"""
+
+[[case]]
+id = "11-retard-jour-civil"
+question = "Combien de commandes au statut delivered passées en 2017 ont été livrées au moins un jour civil après la date estimée ? Ignore les heures et exige une date réelle."
+trap = "Les dates estimées sont généralement à minuit ; comparer les horodatages classe à tort les livraisons le même jour."
+sql = """
+SELECT COUNT(*) AS commandes_en_retard
+FROM orders
+WHERE order_status = 'delivered' AND order_delivered_customer_date IS NOT NULL
+  AND order_purchase_timestamp >= '2017-01-01' AND order_purchase_timestamp < '2018-01-01'
+  AND DATE(order_delivered_customer_date) > DATE(order_estimated_delivery_date)
+"""
+naive_sql = """
+SELECT COUNT(*) FROM orders
+WHERE order_status = 'delivered' AND order_delivered_customer_date IS NOT NULL
+  AND order_purchase_timestamp >= '2017-01-01' AND order_purchase_timestamp < '2018-01-01'
+  AND order_delivered_customer_date > order_estimated_delivery_date
+"""
+
+[[case]]
+id = "12-annee-livraison"
+question = "Combien de commandes au statut delivered ont une livraison client enregistrée en 2017, quelle que soit leur date d'achat ?"
+trap = "Filtrer sur la date d'achat confond deux cohortes autour du changement d'année."
+sql = """
+SELECT COUNT(*) AS livraisons_2017 FROM orders
+WHERE order_status = 'delivered'
+  AND order_delivered_customer_date >= '2017-01-01'
+  AND order_delivered_customer_date < '2018-01-01'
+"""
+naive_sql = """
+SELECT COUNT(*) FROM orders
+WHERE order_status = 'delivered' AND order_delivered_customer_date IS NOT NULL
+  AND order_purchase_timestamp >= '2017-01-01' AND order_purchase_timestamp < '2018-01-01'
+"""
+
+[[case]]
+id = "13-port-multipaiements"
+question = "Pour les commandes livrées passées en 2018 avec au moins deux lignes de paiement, quel est le montant total des frais de port facturés sur les articles ? Donne des BRL au centime."
+trap = "Le port est au grain article et serait multiplié par le nombre de paiements."
+sql = """
+WITH multipaiements AS (
+    SELECT order_id FROM order_payments GROUP BY order_id HAVING COUNT(*) >= 2
+)
+SELECT ROUND(SUM(i.freight_value), 2) AS frais_port_brl
+FROM orders AS o JOIN multipaiements USING (order_id) JOIN order_items AS i USING (order_id)
+WHERE o.order_status = 'delivered'
+  AND o.order_purchase_timestamp >= '2018-01-01' AND o.order_purchase_timestamp < '2019-01-01'
+"""
+naive_sql = """
+SELECT ROUND(SUM(i.freight_value), 2)
+FROM orders AS o JOIN order_items AS i USING (order_id) JOIN order_payments AS p USING (order_id)
+WHERE o.order_status = 'delivered'
+  AND o.order_purchase_timestamp >= '2018-01-01' AND o.order_purchase_timestamp < '2019-01-01'
+  AND o.order_id IN (SELECT order_id FROM order_payments GROUP BY order_id HAVING COUNT(*) >= 2)
+"""
+
+[[case]]
+id = "14-acheteurs-recurrents"
+question = "Combien d'acheteurs uniques ont passé au moins deux commandes distinctes au statut delivered ? Considère toutes les dates."
+trap = "Après une jointure aux articles, certaines commandes distinctes sont comptées plusieurs fois."
+sql = """
+SELECT COUNT(*) AS acheteurs_recurrents FROM (
+    SELECT c.customer_unique_id
+    FROM orders AS o JOIN customers AS c USING (customer_id)
+    WHERE o.order_status = 'delivered'
+    GROUP BY c.customer_unique_id HAVING COUNT(DISTINCT o.order_id) >= 2
+)
+"""
+naive_sql = """
+SELECT COUNT(*) FROM (
+    SELECT c.customer_unique_id
+    FROM orders AS o JOIN customers AS c USING (customer_id) JOIN order_items AS i USING (order_id)
+    WHERE o.order_status = 'delivered'
+    GROUP BY c.customer_unique_id HAVING COUNT(*) >= 2
+)
+"""
+
+[[case]]
+id = "15-commandes-total"
+question = "Combien de commandes la base contient-elle, tous statuts et toutes dates d'achat confondus ?"
+sql = """
+SELECT COUNT(*) AS commandes FROM orders
+"""
+
+[[case]]
+id = "16-repartition-statuts"
+question = "Compte les commandes pour chaque statut observé dans orders, sur l'ensemble des données."
+sql = """
+SELECT order_status AS statut, COUNT(*) AS commandes
+FROM orders
+GROUP BY order_status
+ORDER BY commandes DESC, statut
+"""
+
+[[case]]
+id = "17-achats-mensuels"
+question = "Combien de commandes ont été passées chaque mois de 2017, tous statuts confondus ? Affiche le mois sous forme de texte YYYY-MM."
+sql = """
+SELECT STRFTIME('%Y-%m', order_purchase_timestamp) AS mois, COUNT(*) AS commandes
+FROM orders
+WHERE order_purchase_timestamp >= '2017-01-01' AND order_purchase_timestamp < '2018-01-01'
+GROUP BY mois
+ORDER BY mois
+"""
+
+[[case]]
+id = "18-etats-vendeurs"
+question = "Quels sont les cinq États qui comptent le plus de vendeurs dans sellers ? Affiche le code d'État et le nombre de vendeurs. Départage les ex aequo par code d'État croissant."
+sql = """
+SELECT seller_state AS etat, COUNT(*) AS vendeurs
+FROM sellers
+GROUP BY seller_state
+ORDER BY vendeurs DESC, etat
+LIMIT 5
+"""
+
+[[case]]
+id = "19-poids-manquant"
+question = "Combien de produits ont une valeur NULL dans la colonne de poids en grammes ?"
+sql = """
+SELECT COUNT(*) AS produits_sans_poids FROM products WHERE product_weight_g IS NULL
+"""
+
+[[case]]
+id = "20-distribution-notes"
+question = "Combien de lignes d'avis correspondent à chaque note observée ? Compte chaque ligne de la table order_reviews."
+sql = """
+SELECT review_score AS note, COUNT(*) AS avis
+FROM order_reviews
+GROUP BY review_score
+ORDER BY note
+"""
+
+[[case]]
+id = "21-remise-au-transporteur"
+question = "En jours fractionnaires, quel est le délai moyen entre l'approbation et la remise au transporteur ? Considère tous statuts et toutes dates, avec deux dates présentes et une remise au plus tôt à l'approbation. Arrondis à trois décimales."
+sql = """
+SELECT ROUND(AVG(julianday(order_delivered_carrier_date) - julianday(order_approved_at)), 3)
+       AS delai_moyen_jours
+FROM orders
+WHERE order_approved_at IS NOT NULL AND order_delivered_carrier_date >= order_approved_at
+"""
+
+[[case]]
+id = "22-lignes-types-paiement"
+question = "Combien de lignes de paiement la base contient-elle pour chaque type observé, y compris le type not_defined ?"
+sql = """
+SELECT payment_type AS type_paiement, COUNT(*) AS lignes
+FROM order_payments
+GROUP BY payment_type
+ORDER BY lignes DESC, type_paiement
+"""
+
+[[case]]
+id = "23-montant-vouchers"
+question = "Quel montant total en BRL, arrondi au centime, a été réglé via les lignes de paiement de type voucher, tous statuts et toutes années confondus ?"
+sql = """
+SELECT ROUND(SUM(payment_value), 2) AS montant_vouchers_brl
+FROM order_payments
+WHERE payment_type = 'voucher'
+"""
+
+[[case]]
+id = "24-echeances-carte"
+question = "Combien d'échéances en moyenne par ligne de paiement credit_card associée aux commandes passées en 2017, tous statuts confondus ? Conserve les zéros éventuels et arrondis à trois décimales."
+sql = """
+SELECT ROUND(AVG(p.payment_installments), 3) AS echeances_moyennes
+FROM orders AS o JOIN order_payments AS p USING (order_id)
+WHERE p.payment_type = 'credit_card'
+  AND o.order_purchase_timestamp >= '2017-01-01' AND o.order_purchase_timestamp < '2018-01-01'
+"""
+
+[[case]]
+id = "25-periode-observee"
+question = "Donne le premier et le dernier jour d'achat observés, chacun au format texte YYYY-MM-DD, et le nombre de jours distincts avec au moins un achat. Considère tous les statuts."
+sql = """
+SELECT DATE(MIN(order_purchase_timestamp)) AS premier_jour,
+       DATE(MAX(order_purchase_timestamp)) AS dernier_jour,
+       COUNT(DISTINCT DATE(order_purchase_timestamp)) AS jours_avec_achat
+FROM orders
+"""
+
+[[case]]
+id = "26-categories-articles"
+question = "Pour les commandes livrées passées en 2018, quelles sont les cinq catégories traduites en anglais avec le plus de lignes d'articles ? Donne la catégorie anglaise et le nombre d'articles, et départage les ex aequo par catégorie croissante."
+sql = """
+SELECT p.product_category_name_english AS categorie, COUNT(*) AS articles
+FROM orders AS o JOIN order_items AS i USING (order_id) JOIN products_en AS p USING (product_id)
+WHERE o.order_status = 'delivered' AND p.product_category_name_english IS NOT NULL
+  AND o.order_purchase_timestamp >= '2018-01-01' AND o.order_purchase_timestamp < '2019-01-01'
+GROUP BY categorie
+ORDER BY articles DESC, categorie
+LIMIT 5
+"""
+
+[[case]]
+id = "27-mediane-delai"
+question = "Quel est le délai médian en jours fractionnaires entre achat et livraison client pour les commandes au statut delivered passées en juillet 2017, avec date de livraison connue ? Pour un effectif pair, prends la moyenne des deux valeurs centrales. Arrondis à trois décimales."
+sql = """
+WITH delais AS (
+    SELECT julianday(order_delivered_customer_date) - julianday(order_purchase_timestamp) AS jours
+    FROM orders
+    WHERE order_status = 'delivered' AND order_delivered_customer_date IS NOT NULL
+      AND order_purchase_timestamp >= '2017-07-01' AND order_purchase_timestamp < '2017-08-01'
+), tries AS (
+    SELECT jours, ROW_NUMBER() OVER (ORDER BY jours) AS position, COUNT(*) OVER () AS effectif
+    FROM delais
+)
+SELECT ROUND(AVG(jours), 3) AS delai_median_jours FROM tries
+WHERE position IN ((effectif + 1) / 2, (effectif + 2) / 2)
+"""
+
+[[case]]
+id = "28-part-livree"
+question = "Quel pourcentage des commandes passées en 2017 est au statut delivered, que la date de livraison soit renseignée ou non ? Divise par toutes les commandes passées en 2017 et arrondis à deux décimales."
+sql = """
+SELECT ROUND(100.0 * SUM(order_status = 'delivered') / COUNT(*), 2) AS pourcentage_livre
+FROM orders
+WHERE order_purchase_timestamp >= '2017-01-01' AND order_purchase_timestamp < '2018-01-01'
+"""
+
+[[case]]
+id = "29-couverture-vendeurs"
+question = "Donne le nombre d'États distincts représentés dans sellers, puis le nombre total de vendeurs."
+sql = """
+SELECT COUNT(DISTINCT seller_state) AS etats_distincts, COUNT(*) AS vendeurs FROM sellers
+"""
+
+[[case]]
+id = "30-produits-par-trimestre"
+question = "Pour chacun des trois premiers trimestres de 2018, donne le numéro du trimestre en entier, le nombre de lignes d'articles et le nombre de produits distincts des commandes livrées passées durant le trimestre."
+sql = """
+WITH articles_livres AS (
+    SELECT (CAST(STRFTIME('%m', o.order_purchase_timestamp) AS INTEGER) - 1) / 3 + 1 AS trimestre,
+           i.product_id
+    FROM orders AS o JOIN order_items AS i USING (order_id)
+    WHERE o.order_status = 'delivered'
+      AND o.order_purchase_timestamp >= '2018-01-01' AND o.order_purchase_timestamp < '2018-10-01'
+)
+SELECT trimestre, COUNT(*) AS articles, COUNT(DISTINCT product_id) AS produits_distincts
+FROM articles_livres
+GROUP BY trimestre
+ORDER BY trimestre
+"""

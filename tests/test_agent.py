@@ -1,0 +1,210 @@
+import json
+import sqlite3
+from collections.abc import Sequence
+from contextlib import closing
+from pathlib import Path
+
+import pytest
+
+from sql_report_agent.agent.context import ContextBudget
+from sql_report_agent.agent.loop import AnalysisAgent
+from sql_report_agent.cli import replay
+from sql_report_agent.llm.base import (
+    ChatResponse,
+    LLMError,
+    Message,
+    TokenPricing,
+    TokenUsage,
+    ToolCall,
+    ToolSpec,
+)
+from sql_report_agent.tools.sql import SqlTools
+
+
+class ScriptedClient:
+    def __init__(self, *responses: ChatResponse | LLMError) -> None:
+        self.responses = iter(responses)
+        self.requests: list[tuple[tuple[Message, ...], tuple[ToolSpec, ...]]] = []
+
+    def chat(self, messages: Sequence[Message], tools: Sequence[ToolSpec]) -> ChatResponse:
+        self.requests.append((tuple(messages), tuple(tools)))
+        response = next(self.responses)
+        if isinstance(response, LLMError):
+            raise response
+        return response
+
+
+def tool_call(call_id: str, name: str, **arguments: object) -> ToolCall:
+    return ToolCall(call_id, name, json.dumps(arguments))
+
+
+def requested(*calls: ToolCall) -> ChatResponse:
+    return ChatResponse(
+        Message("assistant", tool_calls=calls),
+        TokenUsage(100, 10),
+        model="scripted",
+        finish_reason="tool_calls",
+    )
+
+
+@pytest.fixture
+def local_database(tmp_path: Path) -> SqlTools:
+    db_path = tmp_path / "local.db"
+    with closing(sqlite3.connect(db_path)) as db, db:
+        db.execute("CREATE TABLE orders (id INTEGER PRIMARY KEY, note TEXT)")
+        db.executemany("INSERT INTO orders VALUES (?, ?)", [(i, f"note-{i}") for i in range(1, 7)])
+    (tmp_path / "data_dictionary.md").write_text("Une ligne par commande.", encoding="utf-8")
+    return SqlTools(db_path)
+
+
+def test_agent_uses_previews_and_traces_calls(
+    tmp_path: Path, local_database: SqlTools, capsys: pytest.CaptureFixture[str]
+) -> None:
+    client = ScriptedClient(
+        requested(
+            tool_call("call-01", "list_tables"),
+            tool_call("call-02", "get_data_dictionary"),
+            tool_call("call-03", "describe_table", table="orders"),
+        ),
+        requested(tool_call("call-04", "run_sql", query="SELECT * FROM orders ORDER BY id")),
+        ChatResponse(
+            Message("assistant", "Analyse établie à partir de r1."),
+            TokenUsage(200, 20),
+            model="scripted",
+        ),
+    )
+    runs = tmp_path / "runs"
+    pricing = TokenPricing(2.0, 4.0)
+    result = AnalysisAgent(client, sql=local_database, runs_dir=runs, pricing=pricing).run(
+        "Analyse les commandes."
+    )
+    assert result.status == "completed"
+    assert result.answer == "Analyse établie à partir de r1."
+    assert result.steps == 3
+    assert result.tool_calls == 4
+    assert result.usage == TokenUsage(400, 40)
+    assert result.estimated_cost_usd == pytest.approx(0.00096)
+    assert result.store.get("r1").rows[-1] == (6, "note-6")
+
+    first_messages, tools = client.requests[0]
+    assert [message.role for message in first_messages] == ["system", "user"]
+    assert [tool.name for tool in tools] == [
+        "list_tables",
+        "describe_table",
+        "get_data_dictionary",
+        "run_sql",
+    ]
+    second_messages, _ = client.requests[1]
+    assert [message.tool_call_id for message in second_messages[3:]] == [
+        "call-01",
+        "call-02",
+        "call-03",
+    ]
+    assert second_messages[3].content == '{"tables":["orders"]}'
+    assert second_messages[4].content == '{"dictionary":"Une ligne par commande."}'
+    assert second_messages[5].content is not None
+    assert len(json.loads(second_messages[5].content)["sample_rows"]) == 3
+    last_messages, _ = client.requests[2]
+    last_tool_reply = last_messages[-1]
+    assert last_tool_reply.content is not None
+    assert json.loads(last_tool_reply.content) == {
+        "result_id": "r1",
+        "columns": ["id", "note"],
+        "types": ["integer", "text"],
+        "rows": [[i, f"note-{i}"] for i in range(1, 6)],
+        "row_count": 6,
+    }
+
+    trace = result.trace_path.read_text(encoding="utf-8")
+    events = [json.loads(line) for line in trace.splitlines()]
+    model_events = [event for event in events if event["event"] == "model_call"]
+    assert model_events[-1]["messages"] == [message.to_payload() for message in last_messages]
+    assert model_events[0]["usage"] == {
+        "prompt_tokens": 100,
+        "completion_tokens": 10,
+        "total_tokens": 110,
+    }
+    assert "note-6" not in trace
+    assert events[-1]["estimated_cost_usd"] == pytest.approx(0.00096)
+    assert all(event.get("duration_ms", 0) >= 0 for event in events)
+
+    replay([result.run_id, "--runs-dir", str(runs), "--verbose"])
+    output = capsys.readouterr().out
+    assert "Tour 3" in output and "run_sql" in output and "Messages" in output
+    assert "Analyse établie à partir de r1." in output
+
+
+def test_returns_recoverable_tool_errors(tmp_path: Path, local_database: SqlTools) -> None:
+    client = ScriptedClient(
+        requested(
+            tool_call("call-01", "run_sql", query="SELECT absent FROM orders"),
+            ToolCall("call-02", "run_sql", "{"),
+            tool_call("call-03", "missing_tool"),
+            tool_call("call-04", "list_tables", extra="bad"),
+            tool_call("call-05", "run_sql", query=123),
+        ),
+        requested(tool_call("call-06", "run_sql", query="SELECT COUNT(*) AS count FROM orders")),
+        ChatResponse(Message("assistant", "Calcul terminé.")),
+    )
+    result = AnalysisAgent(client, sql=local_database, runs_dir=tmp_path / "runs").run("Analyse.")
+    messages, _ = client.requests[1]
+    outputs = []
+    for message in messages[3:]:
+        assert message.content is not None
+        outputs.append(json.loads(message.content)["error"])
+    assert "no such column" in outputs[0]
+    assert "JSON invalides" in outputs[1]
+    assert "Outil inconnu" in outputs[2]
+    assert "Arguments attendus" in outputs[3]
+    assert "texte non vide" in outputs[4]
+    assert len(result.store) == 1
+    assert result.store.get("r1").rows == ((6,),)
+    assert result.usage is None
+
+
+def test_step_limit_and_independent_run_stores(tmp_path: Path, local_database: SqlTools) -> None:
+    request = requested(tool_call("call-01", "run_sql", query="SELECT 1 AS n"))
+    client = ScriptedClient(request, request)
+    agent = AnalysisAgent(client, sql=local_database, max_steps=1, runs_dir=tmp_path / "runs")
+    first = agent.run("Analyse.")
+    second = agent.run("Analyse encore.")
+    assert first.status == second.status == "step_limit"
+    assert first.steps == second.steps == 1
+    assert first.run_id != second.run_id
+    assert first.store is not second.store
+    assert first.store.get("r1") == second.store.get("r1")
+    assert len(client.requests) == 2
+
+
+def test_context_limit_before_model_call(tmp_path: Path) -> None:
+    client = ScriptedClient()
+    result = AnalysisAgent(client, runs_dir=tmp_path, context=ContextBudget(input_tokens=1)).run(
+        "Une demande trop longue pour ce budget."
+    )
+    assert result.status == "context_limit"
+    assert result.steps == 0
+    assert result.usage == TokenUsage(0, 0)
+    assert client.requests == []
+
+
+def test_model_failure_is_traced_without_executing_partial_calls(tmp_path: Path) -> None:
+    error_client = ScriptedClient(LLMError("Service indisponible."))
+    result = AnalysisAgent(error_client, runs_dir=tmp_path).run("Analyse.")
+    assert result.status == "model_error"
+    assert result.usage is None
+    assert result.estimated_cost_usd is None
+    events = [json.loads(line) for line in result.trace_path.read_text().splitlines()]
+    assert events[1]["error"] == "Service indisponible."
+
+    partial_call = Message("assistant", tool_calls=(ToolCall("call", "run_sql", "{"),))
+    client = ScriptedClient(ChatResponse(partial_call, finish_reason="length"))
+    result = AnalysisAgent(client, runs_dir=tmp_path).run("Analyse.")
+    assert result.status == "model_error"
+    assert result.tool_calls == 0
+
+
+def test_replay_rejects_invalid_run_id(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    with pytest.raises(SystemExit) as exit_info:
+        replay(["../outside", "--runs-dir", str(tmp_path)])
+    assert exit_info.value.code == 1
+    assert "Identifiant de trace invalide" in capsys.readouterr().err

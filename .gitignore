@@ -1,0 +1,10 @@
+/.venv/
+/data/
+/runs/
+/output/pdf/
+.env
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+/dist/

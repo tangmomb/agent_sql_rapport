@@ -1,0 +1,157 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <title>{{ report.title }}</title>
+  <style>
+    @page {
+      size: A4;
+      margin: 17mm 18mm 20mm;
+      @bottom-left {
+        content: "Données Olist";
+        color: #405866;
+        font: 8pt "DejaVu Sans", sans-serif;
+      }
+      @bottom-right {
+        content: counter(page) " / " counter(pages);
+        color: #405866;
+        font: 8pt "DejaVu Sans", sans-serif;
+      }
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      color: #182c3d;
+      font: 10pt / 1.55 "DejaVu Sans", sans-serif;
+      overflow-wrap: anywhere;
+    }
+    header {
+      padding-top: 9mm;
+      border-top: 2.4pt solid #167f7a;
+      margin-bottom: 7mm;
+    }
+    h1, h2, p { margin: 0; }
+    h1 {
+      font: 33pt / 1.12 Georgia, "DejaVu Serif", serif;
+      letter-spacing: -0.6pt;
+    }
+    h2 {
+      margin-bottom: 2.5mm;
+      color: #175b59;
+      font-size: 13pt;
+      line-height: 1.24;
+      break-after: avoid;
+    }
+    p { orphans: 2; widows: 2; }
+    .prose { white-space: pre-line; }
+    .summary {
+      padding: 4.4mm 5mm;
+      margin-bottom: 7mm;
+      background: #ecf6f4;
+      border-left: 2pt solid #167f7a;
+    }
+    .analysis {
+      padding-top: 3.5mm;
+      border-top: 0.6pt solid #cbdadc;
+      margin-top: 6mm;
+    }
+    figure {
+      margin: 3mm 0 0;
+      padding: 2mm 0;
+      break-inside: avoid;
+    }
+    figure img { display: block; width: 100%; height: auto; }
+    figcaption, .table-note {
+      color: #405866;
+      font-size: 8pt;
+      margin-top: 1.2mm;
+    }
+    table {
+      margin-top: 3mm;
+      border-collapse: collapse;
+      table-layout: fixed;
+      width: 100%;
+      font-size: 8.5pt;
+      line-height: 1.35;
+    }
+    th, td {
+      padding: 1.4mm 2.3mm;
+      text-align: left;
+      vertical-align: top;
+      border-bottom: 0.5pt solid #dce6e8;
+    }
+    th { color: #175b59; background: #eaf3f3; }
+    tbody tr:nth-child(even) { background: #f5f8f9; }
+    tr { break-inside: avoid; }
+    .number { text-align: right; font-variant-numeric: tabular-nums; }
+    .warning {
+      padding: 3.5mm 4.5mm;
+      margin: 6mm 0 0;
+      border-left: 2pt solid #946222;
+      background: #fcf3e4;
+      color: #553d21;
+    }
+    .warning h2 { color: #6c4b23; }
+    .warning ul { margin: 1mm 0 0; padding-left: 5mm; }
+  </style>
+</head>
+<body>
+  <header><h1>{{ report.title }}</h1></header>
+  <section class="summary">
+    <h2>Synthèse</h2>
+    <p class="prose">{{ report.summary }}</p>
+  </section>
+  {% for section in report.sections %}
+  <section class="analysis">
+    <h2>{{ section.heading }}</h2>
+    <p class="prose">{{ section.text }}</p>
+    {% if section.chart %}
+    <figure>
+      <img src="{{ section.chart | png_uri }}" alt="{{ section.chart.title }}">
+      {% if section.chart.missing_rows %}
+      <figcaption>Lignes écartées faute de valeur sur un axe ({{ section.chart.missing_rows }}).</figcaption>
+      {% endif %}
+    </figure>
+    {% endif %}
+    {% if section.table %}
+      {% if section.table.rows %}
+      <table>
+        <thead>
+          <tr>
+            {% for column in section.table.columns %}
+            <th scope="col"{% if section.table.types[loop.index0] in ("integer", "real") %} class="number"{% endif %}>{{ column | replace("_", " ") }}</th>
+            {% endfor %}
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in section.table.rows[:table_limit] %}
+          <tr>
+            {% for value in row %}
+            <td{% if section.table.types[loop.index0] in ("integer", "real") %} class="number"{% endif %}>{{ value | cell }}</td>
+            {% endfor %}
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+        {% if section.table.rows | length > table_limit %}
+        <p class="table-note">{{ table_limit }} premières lignes sur {{ section.table.rows | length }}.</p>
+        {% endif %}
+      {% else %}
+      <p class="table-note">Aucune ligne dans le résultat SQL.</p>
+      {% endif %}
+    {% endif %}
+  </section>
+  {% endfor %}
+  {% if report.audit.unsupported %}
+  <aside class="warning">
+    <h2>Chiffres à vérifier</h2>
+    <p>Les valeurs suivantes n’ont pas de correspondance dans les résultats SQL de cette analyse.</p>
+    <ul>
+      {% for issue in report.audit.unsupported %}
+      <li>{{ issue.field }} ({{ issue.literal }})</li>
+      {% endfor %}
+    </ul>
+  </aside>
+  {% endif %}
+</body>
+</html>
