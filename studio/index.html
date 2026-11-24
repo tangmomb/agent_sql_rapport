@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Explore le pipeline de l’agent SQL et ses traces d’exécution.">
+  <title>Olist · Studio de l’agent SQL</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="demo.js" defer></script>
+  <script src="syntax.js" defer></script>
+  <script src="studio.js" defer></script>
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="index.html" aria-label="Studio de l’agent SQL">
+      <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>
+      <span>Olist <small>Studio</small></span>
+    </a>
+    <div class="top-actions">
+      <button class="quiet-button" id="demo-button" type="button">Exemple Olist</button>
+      <label class="button import-button" for="trace-file"><span aria-hidden="true">＋</span> Importer une trace</label>
+      <input id="trace-file" class="visually-hidden" type="file" accept=".jsonl,.ndjson,.json,text/plain">
+    </div>
+  </header>
+
+  <main>
+    <section class="run-header" aria-labelledby="title">
+      <div class="run-headline">
+        <div>
+          <p class="run-source" id="run-source"></p>
+          <h1 id="title">Pipeline de l’agent SQL</h1>
+          <p id="question" class="question"></p>
+        </div>
+        <p id="run-status" class="status"></p>
+      </div>
+      <div class="metrics" id="metrics" aria-label="Mesures de l’exécution"></div>
+      <p class="error-banner" id="import-error" role="alert" hidden></p>
+    </section>
+
+    <section class="workspace" aria-label="Explorateur de pipeline">
+      <aside class="panel timeline-panel" aria-labelledby="timeline-title">
+        <header class="panel-header">
+          <div><h2 id="timeline-title">Chronologie</h2><p id="event-count"></p></div>
+        </header>
+        <div class="filters" id="filters" aria-label="Filtrer les événements">
+          <button type="button" data-filter="all" aria-pressed="true">Tous</button>
+          <button type="button" data-filter="model_call" aria-pressed="false">Modèle</button>
+          <button type="button" data-filter="tool_call" aria-pressed="false">Outils</button>
+        </div>
+        <ol class="timeline" id="timeline"></ol>
+      </aside>
+
+      <section class="panel graph-panel" aria-labelledby="graph-title">
+        <header class="panel-header graph-header">
+          <div><h2 id="graph-title">Carte du pipeline</h2><p>Sélectionne une étape pour voir son rôle.</p></div>
+          <div class="player" aria-label="Contrôles de lecture">
+            <button type="button" id="previous" aria-label="Événement précédent" title="Précédent">‹</button>
+            <button type="button" id="play" aria-label="Lire la trace" title="Lire la trace">▷</button>
+            <button type="button" id="next" aria-label="Événement suivant" title="Suivant">›</button>
+          </div>
+        </header>
+        <div class="map-scroll">
+          <div class="flow-map" id="flow-map">
+            <div class="wire main-wire"></div>
+            <div class="wire tools-wire"></div>
+            <div class="wire cache-wire local"></div>
+            <div class="wire data-wire local"></div>
+            <div class="wire chart-wire local"></div>
+            <div class="wire pdf-wire local"></div>
+          </div>
+        </div>
+        <footer class="graph-footer">
+          <span><i class="legend active-legend"></i> Étape sélectionnée</span>
+          <span><i class="legend local-legend"></i> Données locales</span>
+          <span id="position"></span>
+        </footer>
+      </section>
+
+      <aside class="panel inspector-panel" aria-labelledby="inspector-title">
+        <header class="panel-header">
+          <div><h2 id="inspector-title">Inspecteur</h2><p id="selection-label"></p></div>
+        </header>
+        <div class="filters tabs" id="tabs" aria-label="Vue de l’inspecteur">
+          <button type="button" data-tab="overview" aria-pressed="true">Aperçu</button>
+          <button type="button" data-tab="launch" data-stage="question" aria-pressed="false" hidden>Lancement</button>
+          <button type="button" data-tab="prompt" data-stage="model" aria-pressed="false" hidden>Prompt</button>
+          <button type="button" data-tab="json" aria-pressed="false">JSON</button>
+        </div>
+        <div id="inspector" class="inspector"></div>
+      </aside>
+    </section>
+    <footer class="page-footer"><span>Agent SQL · Olist</span><span>Les traces importées sont lues dans ce navigateur.</span></footer>
+  </main>
+</body>
+</html>

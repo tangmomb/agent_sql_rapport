@@ -51,6 +51,12 @@ associe un table_result_id. Si un graphique aide à interpréter les résultats,
 appelle create_chart et associe son chart_id. Rédige en texte brut.
 Termine par un appel à write_report seul, avec le rapport complet."""
 
+FINAL_REPORT_INSTRUCTIONS = (
+    "Dernier appel modèle de cette exécution. Appelle uniquement write_report maintenant. "
+    "Rédige le rapport avec les résultats déjà disponibles et indique les limites "
+    "si certaines données manquent."
+)
+
 
 @dataclass(frozen=True, slots=True)
 class AgentResult:
@@ -124,9 +130,9 @@ class AnalysisAgent:
         if report_mode:
             registered += report_tools(store, ChartStore(trace.path.parent / "charts", store))
         tools = {tool.spec.name: tool for tool in registered}
-        specs = tuple(tool.spec for tool in tools.values())
         instructions = REPORT_INSTRUCTIONS if report_mode else ANALYSIS_INSTRUCTIONS
-        initial = (Message("system", f"{SYSTEM_PROMPT}\n{instructions}"), Message("user", question))
+        system_prompt = f"{SYSTEM_PROMPT}\n{instructions}"
+        user_message = Message("user", question)
         history: list[Turn] = []
         usages: list[TokenUsage] = []
         costs: list[float] = []
@@ -146,6 +152,13 @@ class AnalysisAgent:
             report_mode=report_mode,
         )
         for step in range(1, self.max_steps + 1):
+            step_tools = tools
+            step_prompt = system_prompt
+            if report_mode and step == self.max_steps:
+                step_tools = {"write_report": tools["write_report"]}
+                step_prompt = f"{system_prompt}\n\n{FINAL_REPORT_INSTRUCTIONS}"
+            initial = (Message("system", step_prompt), user_message)
+            specs = tuple(tool.spec for tool in step_tools.values())
             try:
                 messages, estimated_tokens = self.context.build(initial, history, specs)
             except ContextLimitError as limit:
@@ -185,7 +198,7 @@ class AnalysisAgent:
 
             replies = []
             for call in calls:
-                reply, report = self._call_tool(trace, step, call, tools.get(call.name))
+                reply, report = self._call_tool(trace, step, call, step_tools.get(call.name))
                 tool_calls += 1
                 replies.append(reply)
                 if report is not None:
@@ -197,6 +210,8 @@ class AnalysisAgent:
 
         if status == "step_limit":
             error = f"Limite de {self.max_steps} appels modèle atteinte."
+            if report_mode:
+                error += " Aucun rapport valide n'a été remis dans le dernier appel."
         usage = None
         if steps == len(usages):
             usage = TokenUsage(

@@ -1,0 +1,579 @@
+"use strict";
+
+const stages = {
+  question: { label: "Demande", sub: "Entrée utilisateur", glyph: "IN", x: 50, y: 18,
+    about: "La question définit le périmètre de l’analyse et accompagne chaque appel au modèle." },
+  model: { label: "Modèle", sub: "Décide du prochain outil", glyph: "AI", x: 50, y: 91,
+    about: "Le client reçoit la demande, les outils disponibles et les échanges récents. Il peut demander un nouvel outil après avoir vu la réponse du précédent." },
+  dictionary: { label: "Dictionnaire", sub: "Schéma et pièges", glyph: "DB", x: 17, y: 174, local: true,
+    about: "Les outils de schéma décrivent les tables et précisent les précautions utiles, comme le nombre de lignes par commande ou les dates manquantes." },
+  sql: { label: "SQLite", sub: "Requête en lecture seule", glyph: "SQL", x: 50, y: 174, local: true,
+    about: "L’agent valide et exécute le SELECT localement. Le modèle reçoit un identifiant et jusqu’à cinq lignes d’aperçu." },
+  store: { label: "ResultStore", sub: "Résultats en mémoire", glyph: "R", x: 83, y: 174, local: true,
+    about: "Les résultats complets restent en mémoire pendant l’analyse. Le modèle réutilise leur identifiant pour les graphiques, les tableaux et les références chiffrées." },
+  chart: { label: "Graphique", sub: "Matplotlib · PNG", glyph: "PNG", x: 17, y: 306, local: true,
+    about: "Matplotlib utilise les colonnes du résultat SQL pour générer un PNG. Le modèle associe ensuite le graphique au rapport par son identifiant." },
+  report: { label: "Rapport", sub: "Validation des références", glyph: "{}", x: 50, y: 306, local: true,
+    about: "Le brouillon est validé, les références telles que {{r1.note_moyenne[0]}} sont résolues et les nombres en dur sans correspondance sont signalés." },
+  pdf: { label: "PDF", sub: "Jinja2 · WeasyPrint", glyph: "PDF", x: 50, y: 405, local: true,
+    about: "La commande report transforme le rapport validé en HTML puis en PDF. Cette étape aval se déroule après la fin de la trace de l’agent." },
+};
+
+const tools = {
+  get_data_dictionary: "dictionary", list_tables: "dictionary", describe_table: "dictionary",
+  run_sql: "sql", create_chart: "chart", write_report: "report",
+};
+
+const byId = (id) => document.getElementById(id);
+const number = new Intl.NumberFormat("fr-FR", { maximumFractionDigits: 2 });
+const money = new Intl.NumberFormat("fr-FR", { minimumFractionDigits: 4, maximumFractionDigits: 6 });
+const missing = "—";
+const state = { events: [], index: 0, stage: "question", filter: "all", tab: "overview", timer: null };
+const nodes = new Map();
+const titleFor = (key) => stages[key].label;
+
+function element(tag, className, text) {
+  const item = document.createElement(tag);
+  if (className) item.className = className;
+  if (text !== undefined) item.textContent = text;
+  return item;
+}
+
+function duration(ms) {
+  if (!Number.isFinite(ms)) return missing;
+  return ms >= 1000 ? `${number.format(ms / 1000)} s` : `${number.format(ms)} ms`;
+}
+
+function eventStage(event) {
+  if (event.event === "run_start") return "question";
+  if (event.event === "model_call") return "model";
+  if (event.event === "tool_call") {
+    return Object.hasOwn(tools, event.name) ? tools[event.name] : "model";
+  }
+  return "report";
+}
+
+function endEvent() {
+  return state.events.findLast((event) => ["run_end", "run_aborted"].includes(event.event));
+}
+
+function observed(key, event) {
+  if (key === "store") return event.event === "tool_call" && event.name === "run_sql" && Boolean(event.output?.result_id);
+  if (key === "report") return event.event === "tool_call" && event.name === "write_report";
+  if (key === "pdf") return false;
+  return eventStage(event) === key;
+}
+
+function setupMap() {
+  for (const [key, stage] of Object.entries(stages)) {
+    const button = element("button", "node");
+    button.type = "button";
+    button.style.setProperty("--x", `${stage.x}%`);
+    button.style.setProperty("--y", `${stage.y}px`);
+    const words = element("span");
+    words.append(element("strong", "", stage.label), element("small", "", stage.sub));
+    button.append(element("span", `glyph${stage.local ? " local" : ""}`, stage.glyph), words);
+    button.addEventListener("click", () => {
+      stop();
+      const at = state.events[state.index];
+      const event = observed(key, at) ? at
+        : state.events.slice(0, state.index + 1).findLast((entry) => observed(key, entry))
+          || state.events.find((entry) => observed(key, entry));
+      if (event) select(state.events.indexOf(event), key);
+      else {
+        state.stage = key;
+        renderSelection();
+      }
+    });
+    nodes.set(key, button);
+    byId("flow-map").append(button);
+  }
+}
+
+function displayStatus(status) {
+  const labels = {
+    completed: "Exécution terminée", step_limit: "Limite d’étapes", context_limit: "Limite de contexte",
+    model_error: "Erreur du modèle", aborted: "Exécution interrompue", partial: "Trace partielle",
+  };
+  return Object.hasOwn(labels, status) ? labels[status] : (status || "Trace partielle");
+}
+
+function renderHeader() {
+  const start = state.events.find((event) => event.event === "run_start");
+  const end = endEvent();
+  const status = end?.status || (end?.event === "run_aborted" ? "aborted" : "partial");
+  byId("run-source").textContent = state.source;
+  byId("question").textContent = start?.question || "Question absente de cette trace.";
+  byId("run-status").textContent = displayStatus(status);
+  byId("run-status").dataset.state = status === "completed" ? "complete" : "issue";
+  const values = [
+    ["Appels au modèle", end?.steps ?? state.events.filter((event) => event.event === "model_call").length],
+    ["Appels d’outils", end?.tool_calls ?? state.events.filter((event) => event.event === "tool_call").length],
+    ["Durée de l’analyse", duration(end?.duration_ms)],
+    ["Tokens déclarés", Number.isFinite(end?.usage?.total_tokens) ? number.format(end.usage.total_tokens) : missing],
+  ];
+  byId("metrics").replaceChildren(...values.map(([label, value]) => {
+    const metric = element("div", "metric");
+    metric.append(element("span", "", label), element("strong", "", value));
+    return metric;
+  }));
+}
+
+function timelineLabel(event) {
+  switch (event.event) {
+    case "run_start": return ["Demande reçue", "Début de l’analyse", "IN"];
+    case "model_call": return [`Tour modèle ${event.step ?? ""}`.trim(), event.model || "Appel au fournisseur", "AI"];
+    case "tool_call": return [event.name || "Outil", event.output?.error ? "Erreur renvoyée au modèle" : `Tour ${event.step ?? "—"} · exécution locale`, "FN"];
+    case "run_end": return [displayStatus(event.status), "Fin de l’analyse", "OK"];
+    case "run_aborted": return ["Exécution interrompue", event.error_type, "!"];
+    default: return [event.event, "Événement importé", "·"];
+  }
+}
+
+function visibleIndexes() {
+  return state.events.flatMap((event, index) => (
+    state.filter === "all" || event.event === state.filter ? [index] : []
+  ));
+}
+
+function renderTimeline() {
+  const items = visibleIndexes();
+  const timeline = byId("timeline");
+  byId("event-count").textContent = `${items.length} sur ${state.events.length} événements`;
+  timeline.replaceChildren();
+  if (!items.length) {
+    timeline.append(element("li", "empty", "Aucun événement pour ce filtre."));
+    return;
+  }
+  for (const index of items) {
+    const event = state.events[index];
+    const [label, detail, glyph] = timelineLabel(event);
+    const listItem = element("li");
+    const item = element("button", "timeline-entry");
+    item.type = "button";
+    item.dataset.index = index;
+    const description = element("span");
+    description.append(element("strong", "", label), element("span", "event-detail", detail));
+    item.append(
+      element("span", `glyph${event.event === "tool_call" ? " local" : ""}`, glyph),
+      description,
+      element("span", "event-duration", Number.isFinite(event.duration_ms) ? duration(event.duration_ms) : ""),
+    );
+    item.addEventListener("click", () => { stop(); select(index); });
+    listItem.append(item);
+    timeline.append(listItem);
+  }
+}
+
+function parseArguments(event) {
+  const args = event.arguments;
+  if (typeof args !== "string") return args;
+  try { return JSON.parse(args); } catch { return args; }
+}
+
+function block(parent, label, content) {
+  if (content === undefined || content === null || content === "") return;
+  const section = element("section", "inspect-block");
+  section.append(element("h4", "", label));
+  section.append(typeof content === "string" ? element("p", "", content) : content);
+  parent.append(section);
+}
+
+function code(text, language = "text") {
+  const snippet = element("code", "snippet");
+  highlightCode(snippet, String(text), language);
+  const pre = element("pre");
+  pre.append(snippet);
+  return pre;
+}
+
+function json(value) {
+  return code(JSON.stringify(value, null, 2), "json");
+}
+
+function renderPrompt(panel, event) {
+  const model = event?.model;
+  block(panel, "Modèle LLM", model === "scripted" ? "Client scripté (scripted)"
+    : typeof model === "string" && model.trim() ? model : "Modèle absent de la trace.");
+  if (!Array.isArray(event?.messages) || !event.messages.length) {
+    block(panel, "Prompt envoyé", "Les messages de ce tour sont absents de la trace.");
+    return;
+  }
+
+  const roles = {
+    system: "Système",
+    user: "Utilisateur",
+    assistant: "Assistant",
+    tool: "Outil",
+  };
+  const messages = element("ol", "prompt-messages");
+  for (const message of event.messages) {
+    const entry = element("li", "prompt-message");
+    if (!message || typeof message !== "object") {
+      entry.append(json(message));
+    } else {
+      const { role, content, ...metadata } = message;
+      const label = Object.hasOwn(roles, role) ? roles[role] : role || "Message";
+      entry.append(element("h5", "", label));
+      if (typeof content === "string" && content.length) {
+        const isToolJson = role === "tool" && /^\s*[\[{]/.test(content);
+        entry.append(code(content, isToolJson ? "json" : "text"));
+      }
+      else if (content != null) entry.append(json(content));
+      if (Object.keys(metadata).length) entry.append(json(metadata));
+    }
+    messages.append(entry);
+  }
+  block(panel, `Prompt envoyé · ${event.messages.length} messages`, messages);
+
+  if (Array.isArray(event.tools) && event.tools.length) {
+    const schemas = element("details", "prompt-tools");
+    schemas.append(element("summary", "", `Schémas des outils envoyés (${event.tools.length})`),
+      json(event.tools));
+    block(panel, "Outils disponibles au tour sélectionné", schemas);
+  }
+}
+
+function chips(parent, values) {
+  const container = element("div", "chips");
+  for (const value of values.filter(Boolean)) container.append(element("span", "chip", value));
+  if (container.childElementCount) parent.append(container);
+}
+
+function previewTable(output) {
+  if (!Array.isArray(output?.columns) || !Array.isArray(output?.rows)) return null;
+  const wrapper = element("div", "data-table");
+  const table = element("table");
+  const headings = table.createTHead().insertRow();
+  for (const column of output.columns) {
+    const header = element("th", "", column);
+    header.scope = "col";
+    headings.append(header);
+  }
+  const body = table.createTBody();
+  for (const row of output.rows) {
+    if (!Array.isArray(row)) continue;
+    const cells = body.insertRow();
+    for (const value of row) cells.append(element("td", "", value ?? "NULL"));
+  }
+  wrapper.append(table);
+  return wrapper;
+}
+
+function miniBars(args) {
+  if (args?.chart_type !== "bar") return null;
+  const result = state.events.slice(0, state.index).findLast((item) => item.name === "run_sql"
+    && item.output?.result_id === args.result_id)?.output;
+  if (!Array.isArray(result?.rows) || !Array.isArray(result.columns)) return null;
+  const x = result.columns.indexOf(args.x);
+  const y = result.columns.indexOf(args.y);
+  if (x === -1 || y === -1) return null;
+  const rows = result.rows.filter((row) => Array.isArray(row) && Number.isFinite(row[y]) && row[y] >= 0);
+  const scale = rows.reduce((maximum, row) => Math.max(maximum, row[y]), 0);
+  if (!scale) return null;
+  const chart = element("div", "mini-bars");
+  for (const row of rows) {
+    const group = element("div", "bar-row");
+    const label = element("div", "bar-label");
+    label.append(element("span", "", row[x] ?? "NULL"), element("strong", "", number.format(row[y])));
+    const track = element("div", "bar-track");
+    const fill = element("span");
+    fill.style.width = `${100 * row[y] / scale}%`;
+    track.setAttribute("aria-hidden", "true");
+    track.append(fill);
+    group.append(label, track);
+    chart.append(group);
+  }
+  return chart;
+}
+
+function renderTool(panel, event) {
+  const args = parseArguments(event);
+  const output = event.output;
+  if (output?.error) {
+    block(panel, "Erreur renvoyée au modèle", output.error);
+    if (args !== undefined) block(panel, "Arguments", json(args));
+    return;
+  }
+  if (event.name === "run_sql") {
+    chips(panel, [output?.result_id, Number.isInteger(output?.row_count) && `${output.row_count} lignes`]);
+    block(panel, "Aperçu des lignes", previewTable(output));
+    if (typeof args?.query === "string") block(panel, "Requête SQL", code(args.query, "sql"));
+    if (output?.truncated) block(panel, "Aperçu tronqué", "Le résultat complet est resté dans le processus Python.");
+  } else if (event.name === "get_data_dictionary") {
+    block(panel, "Extrait du dictionnaire", code(output?.dictionary || output?.preview || "Texte absent de la trace."));
+  } else if (event.name === "create_chart") {
+    chips(panel, [output?.chart_id, output?.result_id, args?.chart_type]);
+    const chart = miniBars(args);
+    if (chart) block(panel, "Aperçu des barres à partir des lignes tracées", chart);
+    if (args !== undefined) block(panel, "Paramètres", json(args));
+  } else if (event.name === "write_report") {
+    block(panel, "Titre proposé", args?.report?.title);
+    block(panel, "Synthèse du brouillon", args?.report?.summary);
+    if (output) block(panel, "Validation", json(output));
+  } else {
+    if (args !== undefined) block(panel, "Entrée", json(args));
+    if (output !== undefined) block(panel, "Sortie", json(output));
+  }
+}
+
+function quotePowerShell(value) {
+  const escape = String.fromCharCode(96);
+  return '"' + value.replace(/[`$"“”„‟]/g, (char) => escape + char) + '"';
+}
+
+function renderLaunch(panel) {
+  panel.append(element("h3", "", "Lancement du run"));
+  const start = state.events.find((event) => event.event === "run_start");
+  if (typeof start?.question !== "string" || !start.question.trim()) {
+    panel.append(element("p", "", "La question de départ est absente de la trace."));
+    return;
+  }
+  if (start.report_mode === false) {
+    panel.append(element("p", "", "Cette trace correspond à une analyse texte lancée depuis Python."));
+    block(panel, "Question", start.question);
+    return;
+  }
+
+  const commandParts = ["uv run --locked --env-file .env report", "--out rapport-rejoue.pdf"];
+  const activeModel = state.events.find((event) => event.event === "model_call"
+    && typeof event.model === "string" && !event.model.startsWith("scripted"))?.model;
+  if (activeModel) commandParts.push("--model=" + quotePowerShell(activeModel));
+  for (const [field, flag] of [
+    ["max_steps", "--max-steps"],
+    ["input_token_budget", "--context-budget"],
+    ["tool_output_token_budget", "--tool-output-budget"],
+  ]) {
+    const value = start[field];
+    if (Number.isSafeInteger(value) && value > 0) commandParts.push(flag + " " + value);
+  }
+  commandParts.push("-- " + quotePowerShell(start.question));
+  const command = commandParts.join(" ");
+  panel.append(element("p", "", state.demo
+    ? "La démo utilise un client scripté. Cette commande relance la même question avec Mistral."
+    : "Commande reconstituée à partir des paramètres disponibles dans la trace."));
+  const preview = code(command, "powershell");
+  block(panel, "Commande PowerShell", preview);
+  panel.append(element("p", "", "L’option --max-steps limite les appels au modèle. Un appel peut demander plusieurs outils."));
+  const actions = element("div", "launch-actions");
+  const copy = element("button", "quiet-button", "Copier la commande");
+  copy.type = "button";
+  const status = element("span", "copy-status");
+  status.setAttribute("role", "status");
+  copy.addEventListener("click", async () => {
+    try {
+      await navigator.clipboard.writeText(command);
+      status.textContent = "Commande copiée.";
+    } catch {
+      const range = document.createRange();
+      range.selectNodeContents(preview);
+      const selection = window.getSelection();
+      selection.removeAllRanges();
+      selection.addRange(range);
+      status.textContent = "Commande sélectionnée. Appuie sur Ctrl+C.";
+    }
+  });
+  actions.append(copy, status);
+  panel.append(actions);
+}
+
+function renderInspector() {
+  const tabs = byId("tabs").querySelectorAll("button");
+  for (const button of tabs) {
+    const { stage, tab } = button.dataset;
+    button.hidden = Boolean(stage && stage !== state.stage);
+    if (button.hidden && tab === state.tab) state.tab = "overview";
+  }
+  for (const button of tabs) {
+    button.setAttribute("aria-pressed", String(button.dataset.tab === state.tab));
+  }
+
+  const panel = byId("inspector");
+  const stage = stages[state.stage];
+  const selected = state.events[state.index];
+  const event = state.stage === "pdf" || !observed(state.stage, selected)
+    ? (selected.event === "run_end" && state.stage === "report" ? selected : null) : selected;
+  byId("selection-label").textContent = stage.label + (event?.step ? ` · tour ${event.step}` : "");
+  panel.replaceChildren();
+  if (state.tab === "launch") {
+    byId("selection-label").textContent = "Exécution sélectionnée";
+    renderLaunch(panel);
+    return;
+  }
+  if (state.tab === "prompt") {
+    renderPrompt(panel, event);
+    return;
+  }
+  if (state.tab === "json") {
+    panel.append(event ? json(event) : element("p", "", "Aucun événement JSON enregistré pour cette étape."));
+    return;
+  }
+  panel.append(element("h3", "", stage.label), element("p", "", stage.about));
+  if (state.stage === "pdf") {
+    block(panel, "État", state.demo ? "Le PDF a été généré pour cette démonstration."
+      : "La trace JSONL importée ne permet pas de confirmer qu’un fichier PDF a été écrit.");
+    return;
+  }
+  if (!event) {
+    block(panel, "Trace", "Aucun appel enregistré pour cette étape.");
+    return;
+  }
+  if (state.stage === "store") {
+    chips(panel, [event.output.result_id]);
+    block(panel, "Aperçu disponible dans la trace", previewTable(event.output));
+    return;
+  }
+  switch (event.event) {
+    case "run_start":
+      block(panel, "Question", event.question);
+      chips(panel, [
+        event.max_steps && `${event.max_steps} appels au modèle max.`,
+        event.input_token_budget && `${number.format(event.input_token_budget)} tokens estimés`,
+      ]);
+      if (event.max_steps) {
+        panel.append(element("p", "", "Un appel au modèle peut demander plusieurs outils. Les appels d’outils sont comptés séparément."));
+      }
+      break;
+    case "model_call":
+      chips(panel, [event.model, duration(event.duration_ms), event.finish_reason]);
+      if (Array.isArray(event.response?.tool_calls)) {
+        block(panel, "Outils demandés", event.response.tool_calls.map((call) => call?.function?.name).filter(Boolean).join(", "));
+      }
+      if (event.error) block(panel, "Erreur", event.error);
+      if (event.usage) block(panel, "Compteurs de tokens", json(event.usage));
+      break;
+    case "tool_call":
+      renderTool(panel, event);
+      break;
+    case "run_end":
+      block(panel, "Synthèse après validation", event.answer);
+      block(panel, "Erreur", event.error);
+      if (Number.isFinite(event.estimated_cost_usd)) block(panel, "Coût estimé", `${money.format(event.estimated_cost_usd)} USD`);
+      if (Array.isArray(event.number_audit?.literals)) {
+        const flagged = event.number_audit.literals.filter((entry) => entry && !entry.supported);
+        block(panel, "Chiffres à vérifier", flagged.length ? flagged.map((entry) => entry.literal).join(", ") : "Aucun chiffre signalé.");
+      }
+      break;
+    default:
+      panel.append(json(event));
+  }
+}
+
+function renderSelection() {
+  for (const item of byId("timeline").querySelectorAll("button")) {
+    if (Number(item.dataset.index) === state.index) item.setAttribute("aria-current", "step");
+    else item.removeAttribute("aria-current");
+  }
+  for (const [key, node] of nodes) {
+    node.setAttribute("aria-pressed", String(state.stage === key));
+    node.dataset.observed = String((key === "pdf" && state.demo) || state.events.some((event) => observed(key, event)));
+  }
+  byId("position").textContent = `Événement ${state.index + 1} / ${state.events.length}`;
+  byId("previous").disabled = state.index === 0;
+  byId("next").disabled = state.index === state.events.length - 1;
+  byId("play").disabled = state.events.length < 2;
+  renderInspector();
+}
+
+function select(index, stage = eventStage(state.events[index])) {
+  state.index = index;
+  state.stage = stage;
+  renderSelection();
+}
+
+function stop() {
+  clearInterval(state.timer);
+  state.timer = null;
+  byId("play").textContent = "▷";
+  byId("play").setAttribute("aria-label", "Lire la trace");
+  byId("play").title = "Lire la trace";
+}
+
+function step(increment, scroll = false) {
+  select(Math.min(state.events.length - 1, Math.max(0, state.index + increment)));
+  if (scroll) {
+    const timeline = byId("timeline");
+    const selected = timeline.querySelector('[aria-current="step"]');
+    if (selected) {
+      const source = selected.getBoundingClientRect();
+      const viewport = timeline.getBoundingClientRect();
+      if (source.bottom > viewport.bottom) timeline.scrollTop += source.bottom - viewport.bottom;
+      if (source.top < viewport.top) timeline.scrollTop -= viewport.top - source.top;
+    }
+  }
+}
+
+function loadTrace(events, source, demo = false) {
+  stop();
+  state.events = events;
+  state.source = source;
+  state.demo = demo;
+  state.filter = "all";
+  state.tab = "overview";
+  for (const button of byId("filters").querySelectorAll("button")) {
+    button.setAttribute("aria-pressed", String(button.dataset.filter === state.filter));
+  }
+  byId("import-error").hidden = true;
+  renderHeader();
+  renderTimeline();
+  const firstSql = demo ? events.findIndex((event) => event.name === "run_sql") : 0;
+  select(Math.max(0, firstSql));
+}
+
+function parseTrace(raw) {
+  const text = raw.replace(/^\uFEFF/, "").trim();
+  const records = text.startsWith("[") ? JSON.parse(text) : text.split(/\r?\n/).flatMap((line, index) => {
+    if (!line.trim()) return [];
+    try { return [JSON.parse(line)]; }
+    catch { throw new Error(`JSON invalide à la ligne ${index + 1}.`); }
+  });
+  if (!Array.isArray(records) || !records.length || records.some((record) => (
+    !record || typeof record !== "object" || typeof record.event !== "string"
+  ))) throw new Error("Le fichier doit contenir des événements de trace JSONL.");
+  return records;
+}
+
+setupMap();
+loadTrace(DEMO_TRACE, "DÉMONSTRATION OLIST · CLIENT SCRIPTÉ", true);
+byId("demo-button").addEventListener("click", () => loadTrace(DEMO_TRACE, "DÉMONSTRATION OLIST · CLIENT SCRIPTÉ", true));
+byId("trace-file").addEventListener("change", async (event) => {
+  const input = event.currentTarget;
+  const file = input.files[0];
+  if (!file) return;
+  try {
+    if (file.size > 16_000_000) throw new Error("Le fichier dépasse la limite d’import de 16 Mo.");
+    loadTrace(parseTrace(await file.text()), `TRACE LOCALE · ${file.name}`);
+  } catch (error) {
+    byId("import-error").textContent = error.message;
+    byId("import-error").hidden = false;
+  } finally {
+    input.value = "";
+  }
+});
+byId("filters").addEventListener("click", (event) => {
+  const button = event.target.closest("button[data-filter]");
+  if (!button) return;
+  state.filter = button.dataset.filter;
+  for (const choice of byId("filters").querySelectorAll("button")) choice.setAttribute("aria-pressed", String(choice === button));
+  renderTimeline();
+  renderSelection();
+});
+byId("tabs").addEventListener("click", (event) => {
+  const button = event.target.closest("button[data-tab]");
+  if (!button) return;
+  state.tab = button.dataset.tab;
+  renderInspector();
+});
+byId("previous").addEventListener("click", () => { stop(); step(-1, true); });
+byId("next").addEventListener("click", () => { stop(); step(1, true); });
+byId("play").addEventListener("click", () => {
+  if (state.timer !== null) { stop(); return; }
+  if (state.index === state.events.length - 1) select(0);
+  byId("play").textContent = "Ⅱ";
+  byId("play").setAttribute("aria-label", "Mettre en pause");
+  byId("play").title = "Mettre en pause";
+  state.timer = setInterval(() => {
+    step(1, true);
+    if (state.index === state.events.length - 1) stop();
+  }, 1050);
+});

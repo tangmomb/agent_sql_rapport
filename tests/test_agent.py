@@ -47,6 +47,47 @@ def requested(*calls: ToolCall) -> ChatResponse:
     )
 
 
+@pytest.mark.parametrize("writes_report", [True, False])
+def test_report_reserves_last_call_for_finalization(tmp_path: Path, writes_report: bool) -> None:
+    exploration = tool_call("call-02", "run_sql", query="SELECT 999 AS total")
+    final_calls = [exploration]
+    if writes_report:
+        final_calls.append(
+            tool_call(
+                "call-03",
+                "write_report",
+                report={
+                    "title": "Ventes",
+                    "summary": "Total de {{r1.total[0]}} commandes.",
+                    "sections": [{"heading": "Méthode", "text": "Comptage SQL."}],
+                },
+            )
+        )
+    client = ScriptedClient(
+        requested(tool_call("call-01", "run_sql", query="SELECT 42 AS total")),
+        requested(*final_calls),
+    )
+
+    result = AnalysisAgent(client, runs_dir=tmp_path, max_steps=2).run_report("Analyse.")
+
+    assert result.steps == 2
+    assert len(result.store) == 1
+    assert "run_sql" in {tool.name for tool in client.requests[0][1]}
+    messages, tools = client.requests[1]
+    assert [tool.name for tool in tools] == ["write_report"]
+    assert "Dernier appel modèle" in (messages[0].content or "")
+    assert messages[-1].tool_call_id == "call-01"
+    events = [json.loads(line) for line in result.trace_path.read_text().splitlines()]
+    rejected = next(event for event in events if event.get("tool_call_id") == "call-02")
+    assert "error" in rejected["output"]
+    if writes_report:
+        assert result.status == "completed"
+        assert result.report is not None and result.report.summary == "Total de 42 commandes."
+    else:
+        assert result.status == "step_limit"
+        assert result.report is None
+
+
 @pytest.fixture
 def local_database(tmp_path: Path) -> SqlTools:
     db_path = tmp_path / "local.db"

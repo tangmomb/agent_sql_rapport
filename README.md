@@ -18,6 +18,24 @@ Pour suivre un cas concret, lis [le parcours d’une question](#parcours-dune-qu
 Pour retrouver les composants dans le dépôt, consulte
 [le guide de lecture du code](#guide-de-lecture-du-code).
 
+### Explorer le pipeline dans le navigateur
+
+Ouvre [le studio local](studio/index.html) dans ton navigateur. La démonstration
+Olist est disponible dès l’ouverture. Clique une étape du graphe pour lire son
+rôle et ses données, ou utilise les contrôles sous « Carte du pipeline » pour
+suivre les événements dans l’ordre. L’inspecteur affiche un aperçu et le JSON
+de l’événement sélectionné. Sur le nœud **Demande**, l’onglet **Lancement**
+permet de copier une commande PowerShell reconstituée à partir de la question
+et des paramètres de la trace. `--max-steps` limite les appels au modèle. Chaque
+appel peut demander plusieurs outils. Sur le nœud **Modèle**, l’onglet **Prompt** affiche le
+nom du modèle et le prompt complet du tour sélectionné, avec les messages dans
+l’ordre d’envoi et les schémas des outils consultables.
+
+Le bouton **Importer une trace** charge un fichier `runs/RUN_ID/trace.jsonl`
+dans le navigateur. Le studio est une interface HTML, CSS et JavaScript qui
+relit les exécutions localement. Son ouverture et l’import ne nécessitent
+ni serveur ni clé API.
+
 ## Générer un rapport
 
 Ouvre PowerShell à la racine du projet, dans le dossier qui contient ce README.
@@ -193,7 +211,10 @@ requête. Python exécute l’outil et renvoie sa réponse avec l’identifiant 
 l’appel. Mistral reçoit cette réponse au tour suivant et décide de la suite.
 Une colonne inconnue ou une référence invalide peut ainsi être corrigée.
 La boucle s’arrête quand `write_report` est validé ou quand une limite est
-atteinte. La CLI transmet ensuite le rapport validé au moteur PDF.
+atteinte. En mode rapport, le dernier appel du budget est réservé à
+`write_report`. Le prompt demande de finaliser avec les résultats déjà obtenus.
+Si aucun rapport valide n’est remis, la CLI renvoie une erreur. La CLI
+transmet un rapport validé au moteur PDF.
 
 | Choix | Raison |
 | --- | --- |
