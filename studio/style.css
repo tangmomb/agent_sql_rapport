@@ -91,14 +91,21 @@ h1 { margin-bottom: 8px; font-size: clamp(1.75rem, 3vw, 2.45rem); font-weight: 6
 .player button { display: grid; place-items: center; border: 1px solid var(--line); background: var(--surface-up); border-radius: 6px; width: 33px; height: 32px; font-size: 1.15rem; }
 .player button:hover:not(:disabled) { border-color: var(--muted); }
 
+.graph-panel {
+  --model-color: #8b6bc0;
+  --tool-color: #b67242;
+  display: flex; flex-direction: column;
+}
 .map-scroll {
+  display: flex;
+  flex: 1 0 auto;
   overflow: auto;
   container-type: inline-size;
   background-color: var(--surface-inset);
   background-image: radial-gradient(#222222 1px, transparent 1px);
   background-size: 16px 16px;
 }
-.flow-map { position: relative; min-width: 366px; max-width: 690px; margin: auto; height: 476px; }
+.flow-map { position: relative; flex: 1 0 auto; min-width: 610px; max-width: 690px; margin: auto; height: 318px; }
 .node {
   position: absolute; left: var(--x); top: var(--y); translate: -50% 0;
   display: flex; align-items: center; gap: 8px; text-align: left; overflow: hidden;
@@ -111,24 +118,53 @@ h1 { margin-bottom: 8px; font-size: clamp(1.75rem, 3vw, 2.45rem); font-weight: 6
 .node strong { display: block; font-size: .875rem; line-height: 1.15; }
 .node small { display: block; font-size: .75rem; color: var(--muted); margin-top: 3px; line-height: 1.15; }
 .node[data-observed="false"]:not([aria-pressed="true"]) { border-style: dashed; }
+.node[data-stage="model"] { background: #271e38; border-color: var(--model-color); }
+.node[data-stage="model"]:hover { border-color: #c9a6ff; }
+.node[data-stage="model"][aria-pressed="true"] {
+  background: #392653; border-color: #dabaff;
+  box-shadow: 0 0 0 3px #c9a6ff30, 0 7px 22px #00000075;
+}
+.node[data-stage="model"] .glyph { background: #523875; color: #f0ddff; }
 @container (max-width: 430px) {
   .node { width: 30%; padding: 7px; }
   .node .glyph { display: none; }
   .node strong { font-size: .84rem; }
 }
 .wire { position: absolute; border-color: #747474; border-style: solid; border-width: 0; pointer-events: none; }
-.wire.local { border-color: #427d76; }
-.main-wire { left: 50%; top: 55px; height: 157px; border-left-width: 2px; }
-.tools-wire { left: 17%; top: 145px; width: 33%; height: 48px; border-left-width: 2px; border-top-width: 2px; }
-.cache-wire { left: 50%; top: 202px; width: 33%; height: 20px; border-top-width: 2px; }
-.data-wire { left: 50%; top: 235px; width: 33%; height: 60px; border-right-width: 2px; border-bottom-width: 2px; border-bottom-right-radius: 5px; }
-.chart-wire { left: 17%; top: 294px; width: 33%; height: 13px; border-top-width: 2px; border-left-width: 2px; }
-.pdf-wire { left: 50%; top: 345px; height: 73px; border-left-width: 2px; }
+.main-wire { left: 50%; top: 55px; height: 36px; border-left-width: 2px; }
+.tool-spine { left: 50%; top: 145px; height: 24px; border-left-width: 2px; }
+.tool-row { position: absolute; inset: 182px 14px auto; display: flex; gap: 6px; }
+.tool-cell { position: relative; flex: 1 0 auto; }
+.tool-cell::before, .tool-cell::after { content: ""; position: absolute; pointer-events: none; }
+.tool-cell::before { inset: -14px -3px auto; border-top: 2px solid #747474; }
+.tool-cell:first-child::before { left: 50%; }
+.tool-cell:last-child::before { right: 50%; }
+.tool-cell::after { left: 50%; top: -14px; height: 14px; border-left: 2px solid #747474; }
+.node[data-tool] {
+  position: relative; left: auto; top: auto; translate: none; justify-content: center;
+  min-height: 32px; width: 100%; padding: 5px 4px; border-radius: 6px;
+  background: #3a2418; border-color: var(--tool-color); color: #ffc292;
+  font: 650 .68rem/1.2 var(--mono); white-space: nowrap;
+}
+.node[data-tool]:hover { border-color: #ffc292; background: #4c2b1c; }
+.node[data-tool][aria-pressed="true"] {
+  border-color: #ffc292; background: #663619; color: #fff1e3;
+  box-shadow: 0 0 0 2px #ffab693b;
+}
+.tool-cell:has([data-stage="pdf"]) { margin-right: 8px; }
+.node[data-stage="pdf"] { left: 50%; top: 64px; width: 112px; }
+.tool-cell:has([data-stage="pdf"]) .node[data-tool]::after {
+  content: ""; position: absolute; inset: 100% auto auto 50%; height: 32px;
+  border-left: 2px solid #427d76; pointer-events: none;
+}
+.tool-cell:has([data-stage="pdf"]) .node[data-tool] { overflow: visible; }
 .graph-footer { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 16px; min-height: 46px; padding: 10px 13px; color: var(--muted); font-size: .75rem; border-top: 1px solid var(--line); }
 .graph-footer span { display: flex; align-items: center; gap: 6px; }
 .graph-footer span:last-child { margin-left: auto; }
-.legend { width: 13px; height: 2px; display: inline-block; background: var(--accent); }
-.local-legend { background: #5eb7a9; }
+.legend { width: 10px; height: 10px; border-radius: 3px; }
+.model-legend { background: var(--model-color); }
+.tool-legend { background: var(--tool-color); }
+.unobserved-legend { width: 15px; border: 1px dashed var(--muted); }
 
 .inspector { padding: 14px 15px; max-height: 483px; overflow: auto; word-break: break-word; }
 .inspector h3 { font-size: 1rem; margin: 0 0 8px; letter-spacing: -.018em; }
@@ -144,11 +180,6 @@ h1 { margin-bottom: 8px; font-size: clamp(1.75rem, 3vw, 2.45rem); font-weight: 6
 .syntax-number, .syntax-literal { color: #edbb82; }
 .syntax-comment { color: #9eaa9d; }
 .syntax-punctuation { color: #aeb3ba; }
-.prompt-messages { display: grid; gap: 10px; list-style: none; margin: 0; padding: 0; }
-.prompt-message h5 { margin: 0 0 5px; font-size: .78rem; color: var(--accent); }
-.prompt-message pre + pre, .prompt-tools pre { margin-top: 6px; }
-.prompt-tools summary { cursor: pointer; color: var(--accent); font-size: .85rem; }
-.prompt-tools summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .launch-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .copy-status { color: var(--green); font-size: .8rem; }
 .data-table { overflow: auto; border: 1px solid var(--line); border-radius: 7px; }
@@ -187,7 +218,6 @@ h1 { margin-bottom: 8px; font-size: clamp(1.75rem, 3vw, 2.45rem); font-weight: 6
   .inspector-panel { grid-column: 1; grid-row: 2; }
   .timeline-panel { grid-row: 3; }
   .timeline { grid-template-columns: minmax(0, 1fr); max-height: 295px; }
-  .flow-map { min-width: 330px; }
 }
 @media (prefers-reduced-motion: no-preference) {
   button, .button { transition: background-color .15s ease, border-color .15s ease; }

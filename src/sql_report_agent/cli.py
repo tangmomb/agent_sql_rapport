@@ -5,7 +5,6 @@ import sys
 from collections.abc import Sequence
 from pathlib import Path
 
-from sql_report_agent.agent.context import ContextBudget
 from sql_report_agent.agent.loop import AnalysisAgent
 from sql_report_agent.llm.base import LLMError
 from sql_report_agent.llm.mistral import DEFAULT_MODEL, MistralClient
@@ -22,8 +21,6 @@ def report(argv: Sequence[str] | None = None) -> None:
     parser.add_argument("--db", type=Path, default=Path("data/olist.db"))
     parser.add_argument("--runs-dir", type=Path, default=Path("runs"))
     parser.add_argument("--max-steps", type=int, default=12)
-    parser.add_argument("--context-budget", type=int, default=12_000)
-    parser.add_argument("--tool-output-budget", type=int, default=3_000)
     parser.add_argument("--max-output-tokens", type=int, default=3_000)
     args = parser.parse_args(argv)
     if not args.question.strip():
@@ -33,13 +30,11 @@ def report(argv: Sequence[str] | None = None) -> None:
     if not args.db.is_file():
         parser.error(f"Base SQLite absente ({args.db}). Lancer make setup.")
     try:
-        context = ContextBudget(args.context_budget, args.tool_output_budget)
         renderer = PdfRenderer()
         client = MistralClient(args.model, max_tokens=args.max_output_tokens)
         agent = AnalysisAgent(
             client,
             sql=SqlTools(args.db),
-            context=context,
             max_steps=args.max_steps,
             runs_dir=args.runs_dir,
         )

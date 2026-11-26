@@ -13,7 +13,6 @@ from pathlib import Path
 from statistics import mean, median
 from tempfile import NamedTemporaryFile
 
-from sql_report_agent.agent.context import ContextBudget
 from sql_report_agent.agent.loop import AgentResult, AnalysisAgent
 from sql_report_agent.llm.base import LLMError, TokenPricing
 from sql_report_agent.llm.mistral import DEFAULT_MODEL, MistralClient
@@ -55,8 +54,6 @@ class Suite:
 class Configuration:
     name: str
     model: str
-    context_budget: int
-    tool_output_budget: int
     max_steps: int
     max_output_tokens: int
     pricing: TokenPricing | None = None
@@ -282,7 +279,7 @@ def _number(value: int | float | None, spec: str = "") -> str:
 
 
 def _print_scores(config: Configuration, scores: Sequence[CaseScore]) -> None:
-    print(f"\n{config.name}  {config.model}  (budget {config.context_budget})")
+    print(f"\n{config.name}  {config.model}")
     _print_table(
         ("Cas", "SQL", "Fidélité", "Étapes", "Tokens", "Coût USD", "Latence ms"),
         [
@@ -359,10 +356,7 @@ def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
     parser.add_argument("--output", type=Path, default=Path("runs/eval.json"))
     parser.add_argument("--case", action="append", help="Identifiant à sélectionner (répétable).")
     parser.add_argument("--model", default=DEFAULT_MODEL)
-    parser.add_argument("--context-budget", type=int, default=12_000)
     parser.add_argument("--compare-model")
-    parser.add_argument("--compare-context-budget", type=int)
-    parser.add_argument("--tool-output-budget", type=int, default=3_000)
     parser.add_argument("--max-output-tokens", type=int, default=3_000)
     parser.add_argument("--max-steps", type=int, default=12)
     price_help = "Tarifs USD par million de tokens (entrée, sortie)."
@@ -380,23 +374,15 @@ def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
 
 def _configurations(args: argparse.Namespace) -> list[Configuration]:
     pricing = TokenPricing(*args.price) if args.price is not None else None
-    shared = (args.tool_output_budget, args.max_steps, args.max_output_tokens)
-    configs = [Configuration("A", args.model, args.context_budget, *shared, pricing)]
-    if any(
-        value is not None
-        for value in (args.compare_model, args.compare_context_budget, args.compare_price)
-    ):
+    shared = (args.max_steps, args.max_output_tokens)
+    configs = [Configuration("A", args.model, *shared, pricing)]
+    if args.compare_model is not None or args.compare_price is not None:
         model = args.compare_model or args.model
-        budget = (
-            args.context_budget
-            if args.compare_context_budget is None
-            else args.compare_context_budget
-        )
         if args.compare_price is not None:
             other_pricing = TokenPricing(*args.compare_price)
         else:
             other_pricing = pricing if model == args.model else None
-        configs.append(Configuration("B", model, budget, *shared, other_pricing))
+        configs.append(Configuration("B", model, *shared, other_pricing))
     return configs
 
 
@@ -463,7 +449,6 @@ def _main(args: argparse.Namespace) -> int:
             client,
             sql=SqlTools(args.db),
             runs_dir=args.runs_dir,
-            context=ContextBudget(config.context_budget, config.tool_output_budget),
             max_steps=config.max_steps,
             pricing=config.pricing,
         )

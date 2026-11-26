@@ -126,9 +126,18 @@ class MistralClient:
                 raw = response.read()
         except HTTPError as error:
             error.close()
-            raise LLMError(f"Mistral a renvoyé une erreur HTTP {error.code}.") from error
+            raise LLMError(
+                f"Mistral a renvoyé une erreur HTTP {error.code}.", request_payload=payload
+            ) from error
         except (OSError, HTTPException) as error:
-            raise LLMError("Impossible de terminer l'appel HTTP à Mistral.") from error
-        parsed = _parse_response(raw)
+            raise LLMError(
+                "Impossible de terminer l'appel HTTP à Mistral.", request_payload=payload
+            ) from error
+        try:
+            parsed = _parse_response(raw)
+        except LLMError as error:
+            raise LLMError(str(error), request_payload=payload) from error
         model = parsed.model or self.model
-        return replace(parsed, model=model, pricing=STANDARD_PRICING.get(model))
+        return replace(
+            parsed, model=model, pricing=STANDARD_PRICING.get(model), request_payload=payload
+        )

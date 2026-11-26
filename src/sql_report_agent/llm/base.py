@@ -11,6 +11,10 @@ Role = Literal["system", "user", "assistant", "tool"]
 class LLMError(RuntimeError):
     """Échec de l'appel au modèle ou réponse fournisseur invalide."""
 
+    def __init__(self, message: str, *, request_payload: dict[str, object] | None = None) -> None:
+        super().__init__(message)
+        self.request_payload = request_payload
+
 
 @dataclass(frozen=True, slots=True)
 class ToolCall:
@@ -97,6 +101,7 @@ class ChatResponse:
     model: str | None = None
     finish_reason: str | None = None
     pricing: TokenPricing | None = None
+    request_payload: dict[str, object] | None = None
 
 
 class LLMClient(Protocol):

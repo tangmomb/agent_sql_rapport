@@ -49,10 +49,7 @@ def replay_run(root: Path, run_id: str, *, verbose: bool = False) -> Iterator[st
             record = json.loads(line)
             match record["event"]:
                 case "run_start":
-                    yield (
-                        f"Demande  {record['question']} "
-                        f"(budget {record['input_token_budget']} tokens)"
-                    )
+                    yield f"Demande  {record['question']}"
                 case "model_call":
                     usage = record.get("usage") or {}
                     yield (
@@ -65,8 +62,11 @@ def replay_run(root: Path, run_id: str, *, verbose: bool = False) -> Iterator[st
                     if error := record.get("error"):
                         yield f"  Erreur  {error}"
                     if verbose:
-                        yield f"  Messages  {_display(record['messages'])}"
-                        yield f"  Outils  {_display(record['tools'])}"
+                        if "request" in record:
+                            yield f"  Requête  {_display(record['request'])}"
+                        else:
+                            yield f"  Messages  {_display(record['messages'])}"
+                            yield f"  Outils  {_display(record['tools'])}"
                         yield f"  Réponse  {_display(record.get('response'))}"
                 case "tool_call":
                     yield (

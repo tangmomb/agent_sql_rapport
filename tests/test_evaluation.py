@@ -140,8 +140,6 @@ def test_cli_compares_two_configurations(
             str(output),
             "--compare-model",
             "alternative",
-            "--compare-context-budget",
-            "6000",
             "--price",
             "0.15",
             "0.6",
@@ -155,8 +153,8 @@ def test_cli_compares_two_configurations(
     assert record["complete"]
     config_a, config_b = record["configurations"]
     assert models == [evaluation.DEFAULT_MODEL, "alternative"]
-    assert config_a["configuration"]["context_budget"] == 12_000
-    assert config_b["configuration"]["context_budget"] == 6_000
+    assert config_a["configuration"]["model"] == evaluation.DEFAULT_MODEL
+    assert config_b["configuration"]["model"] == "alternative"
     assert config_a["summary"]["result_accuracy"] == config_b["summary"]["result_accuracy"] == 1
     assert config_a["summary"]["estimated_cost_usd"] == pytest.approx(0.000024)
     assert config_b["summary"]["estimated_cost_usd"] == pytest.approx(0.000048)

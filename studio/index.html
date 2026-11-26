@@ -62,16 +62,14 @@
         <div class="map-scroll">
           <div class="flow-map" id="flow-map">
             <div class="wire main-wire"></div>
-            <div class="wire tools-wire"></div>
-            <div class="wire cache-wire local"></div>
-            <div class="wire data-wire local"></div>
-            <div class="wire chart-wire local"></div>
-            <div class="wire pdf-wire local"></div>
+            <div class="wire tool-spine"></div>
+            <div class="tool-row" id="tool-row"></div>
           </div>
         </div>
         <footer class="graph-footer">
-          <span><i class="legend active-legend"></i> Étape sélectionnée</span>
-          <span><i class="legend local-legend"></i> Données locales</span>
+          <span><i class="legend model-legend" aria-hidden="true"></i> LLM</span>
+          <span><i class="legend tool-legend" aria-hidden="true"></i> Outils</span>
+          <span><i class="legend unobserved-legend" aria-hidden="true"></i> Étape non observée</span>
           <span id="position"></span>
         </footer>
       </section>
@@ -84,6 +82,8 @@
           <button type="button" data-tab="overview" aria-pressed="true">Aperçu</button>
           <button type="button" data-tab="launch" data-stage="question" aria-pressed="false" hidden>Lancement</button>
           <button type="button" data-tab="prompt" data-stage="model" aria-pressed="false" hidden>Prompt</button>
+          <button type="button" data-tab="tool-schema" data-stage="tool" aria-pressed="false" hidden>Schéma JSON</button>
+          <button type="button" data-tab="tool-example" data-stage="tool" aria-pressed="false" hidden>Exemple JSON</button>
           <button type="button" data-tab="json" aria-pressed="false">JSON</button>
         </div>
         <div id="inspector" class="inspector"></div>

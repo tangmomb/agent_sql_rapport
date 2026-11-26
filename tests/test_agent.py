@@ -6,7 +6,6 @@ from pathlib import Path
 
 import pytest
 
-from sql_report_agent.agent.context import ContextBudget
 from sql_report_agent.agent.loop import AnalysisAgent
 from sql_report_agent.cli import replay
 from sql_report_agent.llm.base import (
@@ -217,15 +216,27 @@ def test_step_limit_and_independent_run_stores(tmp_path: Path, local_database: S
     assert len(client.requests) == 2
 
 
-def test_context_limit_before_model_call(tmp_path: Path) -> None:
-    client = ScriptedClient()
-    result = AnalysisAgent(client, runs_dir=tmp_path, context=ContextBudget(input_tokens=1)).run(
-        "Une demande trop longue pour ce budget."
+def test_agent_keeps_large_tool_outputs_and_full_history(tmp_path: Path) -> None:
+    dictionary = "Contenu du dictionnaire\n" * 600
+    path = tmp_path / "data_dictionary.md"
+    path.write_text(dictionary, encoding="utf-8")
+    client = ScriptedClient(
+        requested(tool_call("call-01", "get_data_dictionary")),
+        requested(tool_call("call-02", "get_data_dictionary")),
+        requested(tool_call("call-03", "get_data_dictionary")),
+        ChatResponse(Message("assistant", "Analyse terminée.")),
     )
-    assert result.status == "context_limit"
-    assert result.steps == 0
-    assert result.usage == TokenUsage(0, 0)
-    assert client.requests == []
+
+    result = AnalysisAgent(client, runs_dir=tmp_path, dictionary_path=path).run(
+        "Analyse les commandes."
+    )
+
+    assert result.status == "completed"
+    messages, _ = client.requests[-1]
+    replies = [message for message in messages if message.role == "tool"]
+    assert [reply.tool_call_id for reply in replies] == ["call-01", "call-02", "call-03"]
+    for reply in replies:
+        assert json.loads(reply.content or "") == {"dictionary": dictionary}
 
 
 def test_model_failure_is_traced_without_executing_partial_calls(tmp_path: Path) -> None:

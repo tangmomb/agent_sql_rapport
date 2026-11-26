@@ -1,12 +1,15 @@
 import io
 import json
+from pathlib import Path
 from urllib.error import HTTPError
 from urllib.request import Request
 
 import pytest
 
+from sql_report_agent.agent.loop import AnalysisAgent
 from sql_report_agent.llm import mistral
 from sql_report_agent.llm.base import LLMError, Message, TokenUsage, ToolCall, ToolSpec
+from sql_report_agent.tracing import replay_run
 
 
 def test_mistral_round_trip(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -87,6 +90,34 @@ def test_mistral_reads_text_chunks(monkeypatch: pytest.MonkeyPatch) -> None:
     assert result.message.content == "Un résultat."
     assert result.model == "autre-modele"
     assert result.pricing is None
+
+
+@pytest.mark.parametrize("http_error", [False, True])
+def test_run_traces_exact_mistral_request(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, http_error: bool
+) -> None:
+    monkeypatch.setenv("MISTRAL_API_KEY", "test-key")
+    sent = []
+
+    def send(request: Request, *, timeout: float) -> io.BytesIO:
+        assert request.data is not None
+        sent.append(json.loads(request.data))
+        if http_error:
+            raise HTTPError(request.full_url, 429, "rate limit", {}, io.BytesIO())
+        return io.BytesIO(b'{"choices":[{"message":{"content":"Analyse"}}]}')
+
+    monkeypatch.setattr(mistral, "urlopen", send)
+    client = mistral.MistralClient("requested-model", max_tokens=731)
+    result = AnalysisAgent(client, runs_dir=tmp_path).run("Analyse.")
+
+    records = map(json.loads, result.trace_path.read_text(encoding="utf-8").splitlines())
+    event = next(record for record in records if record["event"] == "model_call")
+    assert event["request"] == sent[0]
+    assert event["request"]["max_tokens"] == 731
+    assert "test-key" not in json.dumps(event)
+    assert any(
+        line.startswith("  Requête  ") for line in replay_run(tmp_path, result.run_id, verbose=True)
+    )
 
 
 def test_mistral_missing_key(monkeypatch: pytest.MonkeyPatch) -> None:

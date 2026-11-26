@@ -27,9 +27,16 @@ suivre les événements dans l’ordre. L’inspecteur affiche un aperçu et le 
 de l’événement sélectionné. Sur le nœud **Demande**, l’onglet **Lancement**
 permet de copier une commande PowerShell reconstituée à partir de la question
 et des paramètres de la trace. `--max-steps` limite les appels au modèle. Chaque
-appel peut demander plusieurs outils. Sur le nœud **Modèle**, l’onglet **Prompt** affiche le
-nom du modèle et le prompt complet du tour sélectionné, avec les messages dans
-l’ordre d’envoi et les schémas des outils consultables.
+appel peut demander plusieurs outils. Sur le nœud **Modèle**, l’onglet **Prompt**
+affiche les instructions système, la demande initiale et les schémas des outils
+du tour sélectionné. L’onglet **Exemple d’appel LLM** affiche le corps de la
+requête envoyée à Mistral, avec l’historique des messages et les paramètres de
+génération. La démonstration affiche un exemple au format Mistral. Les anciennes
+traces affichent les messages et les outils disponibles dans la trace.
+Chaque outil a son propre nœud. **Aperçu** décrit son rôle, **Schéma JSON**
+montre sa définition telle qu’elle est présentée au modèle et **Exemple JSON**
+réunit un appel et sa réponse. Le résultat complet de `run_sql` est conservé
+dans ResultStore pendant l’analyse.
 
 Le bouton **Importer une trace** charge un fichier `runs/RUN_ID/trace.jsonl`
 dans le navigateur. Le studio est une interface HTML, CSS et JavaScript qui
@@ -187,7 +194,7 @@ exacts entre les tables.
 
 ```mermaid
 flowchart LR
-    CLI["Demande en langage naturel"] --> Agent["Boucle Python et budget de contexte"]
+    CLI["Demande en langage naturel"] --> Agent["Boucle Python"]
     Agent -->|"Messages et outils"| LLM["LLMClient / API Mistral"]
     LLM -->|"Appels de fonctions"| Agent
     Agent -->|"Outils de données"| SQL["Schéma, dictionnaire et SQL"]
@@ -205,13 +212,13 @@ flowchart LR
 ```
 
 À chaque tour, la boucle Python envoie les instructions, la question, les
-descriptions des outils et les échanges récents qui tiennent dans le budget
-de contexte. Mistral peut demander un outil, par exemple `run_sql` avec une
+descriptions des outils et l’intégralité des échanges précédents.
+Mistral peut demander un outil, par exemple `run_sql` avec une
 requête. Python exécute l’outil et renvoie sa réponse avec l’identifiant de
 l’appel. Mistral reçoit cette réponse au tour suivant et décide de la suite.
 Une colonne inconnue ou une référence invalide peut ainsi être corrigée.
-La boucle s’arrête quand `write_report` est validé ou quand une limite est
-atteinte. En mode rapport, le dernier appel du budget est réservé à
+La boucle s’arrête quand `write_report` est validé, quand le nombre maximal
+d’appels est atteint ou en cas d’erreur du modèle. Le dernier appel est réservé à
 `write_report`. Le prompt demande de finaliser avec les résultats déjà obtenus.
 Si aucun rapport valide n’est remis, la CLI renvoie une erreur. La CLI
 transmet un rapport validé au moteur PDF.
@@ -231,7 +238,7 @@ transmet un rapport validé au moteur PDF.
 | --- | --- |
 | Comment le ZIP devient une base | [Import des CSV](scripts/setup_db.py), puis [schéma SQLite](scripts/olist_schema.sql). |
 | Ce que lance la commande `report` | [CLI](src/sql_report_agent/cli.py), puis `AnalysisAgent.run_report()` dans [la boucle](src/sql_report_agent/agent/loop.py). |
-| Comment Python et Mistral dialoguent | [Contrat LLMClient](src/sql_report_agent/llm/base.py), [adaptateur HTTP Mistral](src/sql_report_agent/llm/mistral.py) et [budget de contexte](src/sql_report_agent/agent/context.py). |
+| Comment Python et Mistral dialoguent | [Contrat LLMClient](src/sql_report_agent/llm/base.py) et [adaptateur HTTP Mistral](src/sql_report_agent/llm/mistral.py). |
 | Comment un appel d’outil est exécuté | [Outils exposés](src/sql_report_agent/tools/registry.py), [validation SQL](src/sql_report_agent/tools/sql.py) et [stockage des résultats](src/sql_report_agent/store.py). |
 | Comment se construit le PDF | [Graphiques](src/sql_report_agent/tools/charts.py), [validation du rapport](src/sql_report_agent/tools/report.py), [template HTML](src/sql_report_agent/render/template.html.jinja) et [rendu PDF](src/sql_report_agent/render/pdf.py). |
 | Comment vérifier le résultat | [Trace et relecture](src/sql_report_agent/tracing.py), puis [calcul des scores](src/sql_report_agent/evaluation.py). |
@@ -297,9 +304,6 @@ uv run --locked --env-file .env python -m sql_report_agent.evaluation --case 15-
 
 # Les 30 questions
 uv run --locked --env-file .env python -m sql_report_agent.evaluation --output runs/eval.json
-
-# Les 30 questions avec deux budgets, 12 000 puis 6 000 tokens estimés
-uv run --locked --env-file .env python -m sql_report_agent.evaluation --compare-context-budget 6000 --output runs/eval-comparaison.json
 ```
 
 Avec GNU Make et la clé déjà définie dans l’environnement, `make eval` lance
@@ -324,7 +328,7 @@ tokens, entrée puis sortie.
   le coût estimé et le temps jusqu’à la validation du rapport structuré.
   La génération du PDF intervient après cette mesure.
 
-### Résultats vérifiés
+### Résultats vérifiés avec les anciens budgets de contexte
 
 | Exécution | Budget d’entrée | Résultats exacts | Pièges validés | Fidélité | Appels modèle moyens | Latence médiane |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
@@ -356,10 +360,8 @@ Les sorties locales de ces exécutions se trouvent dans
 
 ## Limites connues
 
-- Le budget de contexte estime le nombre de tokens à partir de la taille UTF-8.
-  Le fournisseur fournit ses compteurs effectifs après l’appel. Les tours
-  anciens peuvent sortir du contexte, et un tour qui dépasse à lui seul le
-  budget peut arrêter l’analyse.
+- La fenêtre de contexte du modèle s’applique à l’historique complet envoyé à
+  chaque appel. Le fournisseur fournit ses compteurs effectifs après l’appel.
 - Les requêtes ont un délai par défaut de cinq secondes, une limite de
   10 000 lignes et un plafond de volume estimé. Les grandes extractions
   nécessitent une agrégation ou un filtre. Un tableau PDF affiche jusqu’à
