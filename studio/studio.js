@@ -4,13 +4,13 @@ const stages = {
   question: { label: "Demande", sub: "Entrée utilisateur", glyph: "IN", x: 50, y: 18,
     about: "La question définit le périmètre de l’analyse et accompagne chaque appel au modèle." },
   model: { label: "Modèle", sub: "Décide du prochain outil", glyph: "AI", x: 50, y: 91,
-    about: "Le LLM reçoit la demande, les outils disponibles et l’historique des échanges. Il peut demander un nouvel outil après avoir vu la réponse du précédent." },
+    about: "Le LLM reçoit les règles métier Olist dans le prompt système, avec la demande, les outils disponibles et l’historique des échanges. Il consulte le schéma des tables utiles à la demande." },
   list_tables: { label: "list_tables", tool: true,
     about: "Liste les noms des tables et des vues SQLite. Le LLM peut utiliser ces noms dans describe_table ou dans une requête SQL." },
   describe_table: { label: "describe_table", tool: true,
     about: "Le LLM fournit le nom d’une table ou d’une vue. Le code vérifie qu’elle existe dans SQLite, puis renvoie ses colonnes, leurs types, les clés et jusqu’à trois lignes d’exemple." },
-  get_data_dictionary: { label: "get_data_dictionary", tool: true,
-    about: "Lit le dictionnaire Olist. Il indique ce que représente une ligne, comment relier les tables et quels pièges peuvent fausser les agrégats." },
+  get_data_dictionary: { label: "get_data_dictionary", tool: true, legacy: true,
+    about: "Ancien outil qui chargeait le dictionnaire Olist complet." },
   run_sql: { label: "run_sql", tool: true,
     about: "Le LLM prépare une requête SQL. Le code vérifie qu’il s’agit d’un seul SELECT en lecture seule, puis l’exécute dans SQLite. Il stocke le résultat complet dans ResultStore et renvoie au LLM son identifiant et jusqu’à cinq lignes d’aperçu." },
   create_chart: { label: "create_chart", tool: true,
@@ -18,7 +18,9 @@ const stages = {
   write_report: { label: "write_report", tool: true,
     about: "Le LLM rédige un brouillon structuré et fournit ses références aux résultats SQL et aux graphiques. Le code valide le format, résout les références et signale les chiffres non reliés à un résultat SQL. Une fois le rapport accepté, l’analyse se termine et la commande produit le PDF." },
   pdf: { label: "PDF", sub: "ReportLab", glyph: "PDF", local: true,
-    about: "ReportLab transforme le rapport validé en PDF. Le rendu intervient après la fin de la trace de l’agent, c’est-à-dire après validation de l’outil write_report." },
+    about: "ReportLab transforme le rapport validé en PDF à la fin de l’analyse." },
+  pdf_review: { label: "Juge visuel", sub: "Pages du PDF", glyph: "AI",
+    about: "Un modèle multimodal examine les images des pages du PDF final et propose des corrections de mise en page." },
 };
 
 const byId = (id) => document.getElementById(id);
@@ -44,6 +46,8 @@ function duration(ms) {
 function eventStage(event) {
   if (event.event === "run_start") return "question";
   if (event.event === "model_call") return "model";
+  if (event.event === "pdf_written") return "pdf";
+  if (event.event === "pdf_review") return "pdf_review";
   if (event.event === "tool_call") {
     return Object.hasOwn(stages, event.name) && stages[event.name].tool ? event.name : "model";
   }
@@ -56,12 +60,12 @@ function endEvent() {
 
 function observed(key, event) {
   if (stages[key].tool) return event.event === "tool_call" && event.name === key;
-  if (key === "pdf") return false;
   return eventStage(event) === key;
 }
 
 function setupMap() {
   for (const [key, stage] of Object.entries(stages)) {
+    if (stage.legacy) continue;
     const button = element("button", "node");
     button.type = "button";
     button.dataset.stage = key;
@@ -75,7 +79,7 @@ function setupMap() {
       const words = element("span");
       words.append(element("strong", "", stage.label), element("small", "", stage.sub));
       button.append(element("span", `glyph${stage.local ? " local" : ""}`, stage.glyph), words);
-      if (key === "pdf") {
+      if (key === "pdf" || key === "pdf_review") {
         nodes.get("write_report").parentElement.append(button);
       } else {
         button.style.setProperty("--x", `${stage.x}%`);
@@ -116,7 +120,7 @@ function renderHeader() {
   runStatus.textContent = `${state.source} · ${displayStatus(status)}`;
   runStatus.dataset.state = status;
   const values = [
-    ["Appels au modèle", end?.steps ?? state.events.filter((event) => event.event === "model_call").length],
+    ["Appels au modèle d’analyse", end?.steps ?? state.events.filter((event) => event.event === "model_call").length],
     ["Appels d’outils", end?.tool_calls ?? state.events.filter((event) => event.event === "tool_call").length],
     ["Durée de l’analyse", duration(end?.duration_ms)],
     ["Tokens déclarés", Number.isFinite(end?.usage?.total_tokens) ? number.format(end.usage.total_tokens) : missing],
@@ -134,6 +138,8 @@ function timelineLabel(event) {
     case "model_call": return [`Tour modèle ${event.step ?? ""}`.trim(), event.model || "Appel au fournisseur", "AI"];
     case "tool_call": return [event.name || "Outil", event.output?.error ? "Erreur renvoyée au modèle" : `Tour ${event.step ?? "—"} · exécution locale`, "FN"];
     case "run_end": return [displayStatus(event.status), "Fin de l’analyse", "OK"];
+    case "pdf_written": return ["PDF créé", event.filename, "PDF"];
+    case "pdf_review": return [event.error ? "Relecture incomplète" : "Avis du juge visuel", event.model, "AI"];
     case "run_aborted": return ["Exécution interrompue", event.error_type, "!"];
     default: return [event.event, "Événement importé", "·"];
   }
@@ -141,7 +147,8 @@ function timelineLabel(event) {
 
 function visibleIndexes() {
   return state.events.flatMap((event, index) => (
-    state.filter === "all" || event.event === state.filter ? [index] : []
+    state.filter === "all" || event.event === state.filter
+      || (state.filter === "model_call" && event.event === "pdf_review") ? [index] : []
   ));
 }
 
@@ -319,6 +326,11 @@ function renderLaunch(panel) {
   const activeModel = state.events.find((event) => event.event === "model_call"
     && typeof event.model === "string" && !event.model.startsWith("scripted"))?.model;
   if (activeModel) commandParts.push("--model=" + quotePowerShell(activeModel));
+  const review = state.events.find((event) => event.event === "pdf_review");
+  if (state.demo || review) commandParts.push("--review-pdf");
+  if (typeof review?.model === "string") {
+    commandParts.push("--review-model=" + quotePowerShell(review.model));
+  }
   if (Number.isSafeInteger(start.max_steps) && start.max_steps > 0) {
     commandParts.push("--max-steps " + start.max_steps);
   }
@@ -352,6 +364,51 @@ function renderLaunch(panel) {
   panel.append(actions);
 }
 
+function renderPdfReview(panel, event) {
+  if (!event) {
+    block(panel, "Relecture visuelle", "Lance la commande avec --review-pdf, puis importe sa trace.");
+    return;
+  }
+  chips(panel, [event.model, duration(event.duration_ms)]);
+  if (event.error) block(panel, "Relecture incomplète", event.error);
+  if (event.review) {
+    const review = element("p", "review-text", event.review);
+    block(panel, "Avis du juge", review);
+  }
+}
+
+function renderPdfPages(panel, event) {
+  if (!Array.isArray(event?.pages) || !event.pages.length) {
+    panel.append(element("p", "", "Aucune image de page dans cet événement."));
+    return;
+  }
+  const list = element("div", "review-pages");
+  for (const page of event.pages) {
+    if (!Number.isSafeInteger(page?.number) || page.number < 1) continue;
+    if (typeof page.image !== "string" || !/^data:image\/jpeg;base64,[A-Za-z0-9+/]+=*$/.test(page.image)) continue;
+    const label = `Page ${page.number}`;
+    const button = element("button", "review-page");
+    button.type = "button";
+    const image = element("img");
+    image.src = page.image;
+    image.alt = "";
+    image.loading = "lazy";
+    button.append(image, element("span", "", label));
+    button.addEventListener("click", () => {
+      const dialog = byId("review-dialog");
+      const preview = byId("review-preview");
+      preview.alt = label;
+      preview.src = page.image;
+      byId("review-page-title").textContent = label;
+      dialog.showModal();
+    });
+    list.append(button);
+  }
+  const heading = Number.isSafeInteger(event.total_pages)
+    ? `Pages du lot · ${event.total_pages} au total` : "Pages du lot";
+  if (list.childElementCount) block(panel, heading, list);
+}
+
 function renderInspector() {
   const stage = stages[state.stage];
   const tabs = byId("tabs").querySelectorAll("button");
@@ -359,7 +416,7 @@ function renderInspector() {
     const { stage: scope, tab } = button.dataset;
     if (tab === "json") button.textContent = state.stage === "model" ? "Exemple d’appel LLM" : "JSON";
     button.hidden = (scope === "tool" && !stage.tool)
-      || (tab === "json" && Boolean(stage.tool || state.stage === "pdf"))
+      || (tab === "json" && Boolean(stage.tool || ["pdf", "pdf_review"].includes(state.stage)))
       || Boolean(scope && scope !== "tool" && scope !== state.stage);
     if (button.hidden && tab === state.tab) state.tab = "overview";
   }
@@ -369,10 +426,11 @@ function renderInspector() {
 
   const panel = byId("inspector");
   const selected = state.events[state.index];
-  const event = state.stage === "pdf" || !observed(state.stage, selected)
+  const event = !observed(state.stage, selected)
     ? (selected.event === "run_end" && state.stage === "write_report" ? selected : null) : selected;
   byId("selection-label").textContent = stage.label + (event?.step ? ` · tour ${event.step}` : "");
   panel.replaceChildren();
+  panel.scrollTop = 0;
   if (state.tab === "launch") {
     byId("selection-label").textContent = "Exécution sélectionnée";
     renderLaunch(panel);
@@ -390,6 +448,10 @@ function renderInspector() {
     const detail = element("p");
     detail.append("Le style ", element("code", "", "title"), " définit la police, la taille (33 points) et l’espacement. Python assemble de la même façon les paragraphes, les tableaux et les images dans l’ordre voulu. ReportLab met ces blocs en page et génère le PDF.");
     panel.append(intro, code('_paragraph(report.title, styles["title"])'), detail);
+    return;
+  }
+  if (state.tab === "pdf-pages") {
+    renderPdfPages(panel, event);
     return;
   }
   if (state.tab === "tool-schema") {
@@ -412,8 +474,12 @@ function renderInspector() {
     if (stage.tool) return;
   }
   if (state.stage === "pdf") {
-    block(panel, "État", state.demo ? "Le PDF a été généré pour cette démonstration."
-      : "La trace JSONL importée ne permet pas de confirmer qu’un fichier PDF a été écrit.");
+    block(panel, "État", event?.filename || (state.demo ? "Le PDF a été généré pour cette démonstration."
+      : "La trace JSONL importée ne permet pas de confirmer qu’un fichier PDF a été écrit."));
+    return;
+  }
+  if (state.stage === "pdf_review") {
+    renderPdfReview(panel, event);
     return;
   }
   if (!event) {

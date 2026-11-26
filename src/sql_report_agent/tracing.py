@@ -10,6 +10,16 @@ from uuid import uuid4
 TRACE_NAME = "trace.jsonl"
 
 
+def append_event(path: Path, event: str, **fields: object) -> None:
+    record = {
+        "time_utc": datetime.now(UTC).isoformat(timespec="milliseconds"),
+        "event": event,
+        **fields,
+    }
+    with path.open("a", encoding="utf-8", newline="\n") as trace:
+        trace.write(json.dumps(record, allow_nan=False) + "\n")
+
+
 class RunTrace:
     def __init__(self, root: Path) -> None:
         self.run_id = uuid4().hex
@@ -17,13 +27,7 @@ class RunTrace:
         self.path.parent.mkdir(parents=True)
 
     def write(self, event: str, **fields: object) -> None:
-        record = {
-            "time_utc": datetime.now(UTC).isoformat(timespec="milliseconds"),
-            "event": event,
-            **fields,
-        }
-        with self.path.open("a", encoding="utf-8", newline="\n") as trace:
-            trace.write(json.dumps(record, allow_nan=False) + "\n")
+        append_event(self.path, event, **fields)
 
 
 def _display(value: object) -> str:
@@ -88,3 +92,12 @@ def replay_run(root: Path, run_id: str, *, verbose: bool = False) -> Iterator[st
                         yield f"  {detail}"
                 case "run_aborted":
                     yield f"Trace interrompue  {record['error_type']}"
+                case "pdf_written":
+                    yield f"PDF créé  {record['filename']}"
+                case "pdf_review":
+                    pages = ", ".join(str(page["number"]) for page in record["pages"])
+                    model = record.get("model") or "inconnu"
+                    yield f"Juge visuel  {model} · pages {pages or '?'}"
+                    detail = record.get("error") or record.get("review")
+                    if detail:
+                        yield f"  {_preview(detail, verbose=verbose)}"

@@ -57,6 +57,18 @@ Le terminal affiche le chemin du PDF et l’identifiant de la trace. Le fichier
 `rapport.pdf` apparaît dans le dossier courant. Pour l’ouvrir sous Windows,
 utilise `Invoke-Item .\rapport.pdf`.
 
+Ajoute `--review-pdf` pour demander une relecture visuelle après la création
+du fichier. La commande envoie à Mistral la question et les images des pages
+finales, par lots de quatre. Mistral Large 4 (`mistral-large-4-0`) signale les
+défauts de mise en page et propose des corrections, sans modifier le PDF.
+`--review-model` permet de choisir un autre modèle multimodal.
+
+Dans le Studio, importe la trace de cette exécution et sélectionne **Juge
+visuel** dans la chronologie. L’onglet **Pages du PDF** affiche les pages du lot
+correspondant. Clique sur une vignette pour l’agrandir. Les images sont conservées dans la
+trace. Si la relecture échoue, le PDF reste disponible et l’erreur apparaît
+dans la trace.
+
 Un exemple généré pendant le développement est disponible dans
 `output/pdf/rapport-olist-2017.pdf` sur ce poste. Il compare les avis des
 commandes livrées à l’heure ou en avance avec ceux des commandes en retard.
@@ -110,7 +122,7 @@ prévue ou avant avec celles arrivées en retard.
 
 | Appel dans la trace | Ce qui passe à l’étape suivante |
 | --- | --- |
-| `get_data_dictionary` | Les particularités des données, dont les dates manquantes et la possibilité de plusieurs avis par commande. |
+| `describe_table` | Le schéma des tables utiles à l’analyse. Les règles métier Olist, dont les dates manquantes et les avis multiples, figurent dans le prompt système. |
 | `run_sql` | Le résultat `r1` à deux lignes. La colonne `note_moyenne` contient **4,28** pour le premier groupe et **2,32** pour le second. |
 | `create_chart` | L’identifiant `c1` du graphique produit localement à partir de `r1`. |
 | `write_report` | Le brouillon associe le tableau `r1` et le graphique `c1` à une section et cite les cellules SQL dans le texte. |
@@ -177,7 +189,7 @@ flowchart LR
     CLI["Demande en langage naturel"] --> Agent["Boucle Python"]
     Agent -->|"Messages et outils"| LLM["LLMClient / API Mistral"]
     LLM -->|"Appels de fonctions"| Agent
-    Agent -->|"Outils de données"| SQL["Schéma, dictionnaire et SQL"]
+    Agent -->|"Outils de données"| SQL["Schéma et SQL"]
     SQL -->|"Lecture seule"| DB[("SQLite Olist")]
     SQL -->|"Résultat complet"| Store[("ResultStore en mémoire")]
     SQL -->|"Identifiant et aperçu"| Agent

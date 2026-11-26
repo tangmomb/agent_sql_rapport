@@ -83,6 +83,7 @@
           <button type="button" data-tab="launch" data-stage="question" aria-pressed="false" hidden>Lancement</button>
           <button type="button" data-tab="prompt" data-stage="model" aria-pressed="false" hidden>Prompt</button>
           <button type="button" data-tab="reportlab" data-stage="pdf" aria-pressed="false" hidden>Comment fonctionne reportlab ?</button>
+          <button type="button" data-tab="pdf-pages" data-stage="pdf_review" aria-pressed="false" hidden>Pages du PDF</button>
           <button type="button" data-tab="tool-schema" data-stage="tool" aria-pressed="false" hidden>Schéma JSON</button>
           <button type="button" data-tab="tool-example" data-stage="tool" aria-pressed="false" hidden>Exemple JSON</button>
           <button type="button" data-tab="json" aria-pressed="false">JSON</button>
@@ -92,5 +93,12 @@
     </section>
     <footer class="page-footer"><span>Agent SQL · Olist</span><span>Les traces importées sont lues dans ce navigateur.</span></footer>
   </main>
+  <dialog id="review-dialog" aria-labelledby="review-page-title">
+    <form method="dialog" class="review-dialog-header">
+      <h2 id="review-page-title"></h2>
+      <button class="quiet-button">Fermer</button>
+    </form>
+    <img id="review-preview" alt="">
+  </dialog>
 </body>
 </html>

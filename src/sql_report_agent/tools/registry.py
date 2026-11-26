@@ -2,12 +2,10 @@
 
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from pathlib import Path
 
 from sql_report_agent.llm.base import ToolSpec
 from sql_report_agent.store import ResultStore
 from sql_report_agent.tools.charts import CHART_TYPES, ChartStore
-from sql_report_agent.tools.dictionary import get_data_dictionary
 from sql_report_agent.tools.report import MAX_SECTIONS, PreparedReport, prepare_report
 from sql_report_agent.tools.sql import SqlTools
 
@@ -56,7 +54,7 @@ def _object_schema(
     }
 
 
-def sql_tools(sql: SqlTools, dictionary_path: Path, store: ResultStore) -> tuple[Tool, ...]:
+def sql_tools(sql: SqlTools, store: ResultStore) -> tuple[Tool, ...]:
     def run_sql(arguments: dict[str, object]) -> ToolOutput:
         result = sql.run_sql(text_argument(arguments, "query"))
         return {"result_id": store.add(result), **result.preview()}
@@ -73,12 +71,6 @@ def sql_tools(sql: SqlTools, dictionary_path: Path, store: ResultStore) -> tuple
                 table="Nom exact de la table ou vue.",
             ),
             lambda args: sql.describe_table(text_argument(args, "table")),
-        ),
-        Tool(
-            _sql_spec(
-                "get_data_dictionary", "Donne les relations et les pièges connus des données."
-            ),
-            lambda _: {"dictionary": get_data_dictionary(dictionary_path)},
         ),
         Tool(
             _sql_spec(

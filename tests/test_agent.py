@@ -79,6 +79,7 @@ def test_report_reserves_last_call_for_finalization(
     messages, tools = client.requests[1]
     assert [tool.name for tool in tools] == ["write_report"]
     assert "Dernier appel modèle" in (messages[0].content or "")
+    assert "Règles métier Olist" in (messages[0].content or "")
     assert messages[-1].tool_call_id == "call-01"
     events = [json.loads(line) for line in result.trace_path.read_text().splitlines()]
     rejected = next(event for event in events if event.get("tool_call_id") == "call-02")
@@ -97,7 +98,6 @@ def local_database(tmp_path: Path) -> SqlTools:
     with closing(sqlite3.connect(db_path)) as db, db:
         db.execute("CREATE TABLE orders (id INTEGER PRIMARY KEY, note TEXT)")
         db.executemany("INSERT INTO orders VALUES (?, ?)", [(i, f"note-{i}") for i in range(1, 7)])
-    (tmp_path / "data_dictionary.md").write_text("Une ligne par commande.", encoding="utf-8")
     return SqlTools(db_path)
 
 
@@ -107,10 +107,9 @@ def test_agent_uses_previews_and_traces_calls(
     client = ScriptedClient(
         requested(
             tool_call("call-01", "list_tables"),
-            tool_call("call-02", "get_data_dictionary"),
-            tool_call("call-03", "describe_table", table="orders"),
+            tool_call("call-02", "describe_table", table="orders"),
         ),
-        requested(tool_call("call-04", "run_sql", query="SELECT * FROM orders ORDER BY id")),
+        requested(tool_call("call-03", "run_sql", query="SELECT * FROM orders ORDER BY id")),
         ChatResponse(
             Message("assistant", "Analyse établie à partir de r1."),
             TokenUsage(200, 20),
@@ -125,30 +124,29 @@ def test_agent_uses_previews_and_traces_calls(
     assert result.status == "completed"
     assert result.answer == "Analyse établie à partir de r1."
     assert result.steps == 3
-    assert result.tool_calls == 4
+    assert result.tool_calls == 3
     assert result.usage == TokenUsage(400, 40)
     assert result.estimated_cost_usd == pytest.approx(0.00096)
     assert result.store.get("r1").rows[-1] == (6, "note-6")
 
     first_messages, tools = client.requests[0]
     assert [message.role for message in first_messages] == ["system", "user"]
+    assert "customers.customer_unique_id" in (first_messages[0].content or "")
     assert [tool.name for tool in tools] == [
         "list_tables",
         "describe_table",
-        "get_data_dictionary",
         "run_sql",
     ]
     second_messages, _ = client.requests[1]
     assert [message.tool_call_id for message in second_messages[3:]] == [
         "call-01",
         "call-02",
-        "call-03",
     ]
     assert second_messages[3].content == '{"tables":["orders"]}'
-    assert second_messages[4].content == '{"dictionary":"Une ligne par commande."}'
-    assert second_messages[5].content is not None
-    assert len(json.loads(second_messages[5].content)["sample_rows"]) == 3
+    assert second_messages[4].content is not None
+    assert len(json.loads(second_messages[4].content)["sample_rows"]) == 3
     last_messages, _ = client.requests[2]
+    assert last_messages[: len(second_messages)] == second_messages
     last_tool_reply = last_messages[-1]
     assert last_tool_reply.content is not None
     assert json.loads(last_tool_reply.content) == {
@@ -218,29 +216,6 @@ def test_step_limit_and_independent_run_stores(tmp_path: Path, local_database: S
     assert first.store is not second.store
     assert first.store.get("r1") == second.store.get("r1")
     assert len(client.requests) == 2
-
-
-def test_agent_keeps_large_tool_outputs_and_full_history(tmp_path: Path) -> None:
-    dictionary = "Contenu du dictionnaire\n" * 600
-    path = tmp_path / "data_dictionary.md"
-    path.write_text(dictionary, encoding="utf-8")
-    client = ScriptedClient(
-        requested(tool_call("call-01", "get_data_dictionary")),
-        requested(tool_call("call-02", "get_data_dictionary")),
-        requested(tool_call("call-03", "get_data_dictionary")),
-        ChatResponse(Message("assistant", "Analyse terminée.")),
-    )
-
-    result = AnalysisAgent(client, runs_dir=tmp_path, dictionary_path=path).run(
-        "Analyse les commandes."
-    )
-
-    assert result.status == "completed"
-    messages, _ = client.requests[-1]
-    replies = [message for message in messages if message.role == "tool"]
-    assert [reply.tool_call_id for reply in replies] == ["call-01", "call-02", "call-03"]
-    for reply in replies:
-        assert json.loads(reply.content or "") == {"dictionary": dictionary}
 
 
 def test_model_failure_is_traced_without_executing_partial_calls(tmp_path: Path) -> None:

@@ -37,9 +37,16 @@ class Message:
     tool_calls: tuple[ToolCall, ...] = ()
     tool_call_id: str | None = None
     name: str | None = None
+    image_urls: tuple[str, ...] = ()
 
     def to_payload(self) -> dict[str, object]:
-        payload: dict[str, object] = {"role": self.role, "content": self.content}
+        content: object = self.content
+        if self.image_urls:
+            content = [
+                {"type": "text", "text": self.content or ""},
+                *({"type": "image_url", "image_url": url} for url in self.image_urls),
+            ]
+        payload: dict[str, object] = {"role": self.role, "content": content}
         if self.tool_calls:
             payload["tool_calls"] = [call.to_payload() for call in self.tool_calls]
         if self.tool_call_id is not None:
