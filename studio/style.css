@@ -55,12 +55,13 @@ button:focus-visible, a:focus-visible, #trace-file:focus-visible + *, body:has(#
 
 main { max-width: 1660px; margin: 0 auto; padding: 30px 3.2% 0; }
 .run-headline { display: flex; align-items: start; justify-content: space-between; gap: 16px; }
-.run-source { margin: 0 0 9px; color: var(--accent); font: 600 .78rem var(--mono); letter-spacing: .035em; overflow-wrap: anywhere; }
 h1, h2, h3, p { margin-top: 0; }
 h1 { margin-bottom: 8px; font-size: clamp(1.75rem, 3vw, 2.45rem); font-weight: 680; letter-spacing: -.047em; line-height: 1.13; }
 .question { margin: 0; color: var(--muted); line-height: 1.55; }
-.status { margin: 4px 0 0; padding: 6px 10px; border: 1px solid #36594f; border-radius: 999px; color: var(--green); background: #19302d; white-space: nowrap; font-size: .875rem; }
-.status[data-state="issue"] { background: #382928; color: #ffc3a8; border-color: #714a3e; }
+.trace-summary { margin: 10px 0 0; color: var(--muted); font-size: .875rem; line-height: 1.5; }
+.status { max-width: 50%; margin: 4px 0 0; color: var(--muted); font-size: .875rem; font-weight: 600; overflow-wrap: anywhere; }
+.status[data-state="completed"] { color: var(--green); }
+.status[data-state]:not([data-state="completed"], [data-state="partial"]) { color: #ff9292; }
 .metrics { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 11px; margin: 19px 0; }
 .metric { min-width: 0; padding: 12px 15px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); }
 .metric span { display: block; color: var(--muted); font-size: .875rem; }
@@ -172,6 +173,7 @@ h1 { margin-bottom: 8px; font-size: clamp(1.75rem, 3vw, 2.45rem); font-weight: 6
 .inspect-block { margin: 0 0 13px; }
 .inspect-block h4 { font-size: .82rem; margin: 0 0 7px; color: var(--accent); }
 .inspect-block pre, .inspector > pre { margin: 0; background: var(--surface-inset); color: var(--accent); border: 1px solid var(--line); border-radius: 7px; padding: 10px; font: .78rem/1.65 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; }
+.inspector > pre + p { margin-top: 13px; }
 .snippet { font: inherit; }
 .syntax-key { color: #8fd2f1; }
 .syntax-keyword { color: #91b9fa; font-weight: 600; }
@@ -182,18 +184,8 @@ h1 { margin-bottom: 8px; font-size: clamp(1.75rem, 3vw, 2.45rem); font-weight: 6
 .syntax-punctuation { color: #aeb3ba; }
 .launch-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .copy-status { color: var(--green); font-size: .8rem; }
-.data-table { overflow: auto; border: 1px solid var(--line); border-radius: 7px; }
-.data-table table { width: 100%; border-collapse: collapse; font-size: .8rem; }
-.data-table th, .data-table td { text-align: left; padding: 7px 8px; border-bottom: 1px solid var(--line); white-space: nowrap; }
-.data-table th { color: var(--text); background: var(--surface-up); }
-.data-table tr:last-child td { border-bottom: 0; }
 .chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 12px; }
 .chip { border: 1px solid var(--line); padding: 4px 7px; border-radius: 5px; color: var(--accent); font: .75rem var(--mono); }
-.mini-bars { display: grid; gap: 10px; }
-.bar-row { display: grid; gap: 5px; }
-.bar-label { display: flex; justify-content: space-between; gap: 6px; font-size: .8rem; }
-.bar-track { height: 8px; background: var(--surface-active); border-radius: 6px; overflow: hidden; }
-.bar-track span { display: block; height: 100%; background: #8fcfbd; border-radius: inherit; }
 .page-footer { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px; color: var(--muted); font-size: .78rem; padding: 14px 0; }
 
 @media (max-width: 1060px) {
@@ -211,7 +203,8 @@ h1 { margin-bottom: 8px; font-size: clamp(1.75rem, 3vw, 2.45rem); font-weight: 6
   .quiet-button, .button { padding-inline: 7px; }
   .brand { font-size: 1rem; gap: 5px; }
   .brand-mark { width: 29px; height: 29px; padding-bottom: 6px; }
-  .run-headline { flex-wrap: wrap; gap: 4px; }
+  .run-headline { flex-direction: column; gap: 8px; }
+  .status { max-width: 100%; }
   .metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .workspace { grid-template-columns: minmax(0, 1fr); }
   .graph-panel { grid-row: 1; }

@@ -27,12 +27,12 @@
     <section class="run-header" aria-labelledby="title">
       <div class="run-headline">
         <div>
-          <p class="run-source" id="run-source"></p>
           <h1 id="title">Pipeline de l’agent SQL</h1>
           <p id="question" class="question"></p>
         </div>
         <p id="run-status" class="status"></p>
       </div>
+      <p class="trace-summary">Chaque exécution crée un fichier <code>runs/&lt;id&gt;/trace.jsonl</code> avec un objet JSON par événement. La trace contient la question, les appels au LLM et aux outils, leurs réponses et le bilan de l’exécution. C'est ceci que nous explorons ci-dessous.</p>
       <div class="metrics" id="metrics" aria-label="Mesures de l’exécution"></div>
       <p class="error-banner" id="import-error" role="alert" hidden></p>
     </section>
@@ -69,7 +69,7 @@
         <footer class="graph-footer">
           <span><i class="legend model-legend" aria-hidden="true"></i> LLM</span>
           <span><i class="legend tool-legend" aria-hidden="true"></i> Outils</span>
-          <span><i class="legend unobserved-legend" aria-hidden="true"></i> Étape non observée</span>
+          <span><i class="legend unobserved-legend" aria-hidden="true"></i> Étape non observée dans la trace actuelle</span>
           <span id="position"></span>
         </footer>
       </section>
@@ -82,6 +82,7 @@
           <button type="button" data-tab="overview" aria-pressed="true">Aperçu</button>
           <button type="button" data-tab="launch" data-stage="question" aria-pressed="false" hidden>Lancement</button>
           <button type="button" data-tab="prompt" data-stage="model" aria-pressed="false" hidden>Prompt</button>
+          <button type="button" data-tab="reportlab" data-stage="pdf" aria-pressed="false" hidden>Comment fonctionne reportlab ?</button>
           <button type="button" data-tab="tool-schema" data-stage="tool" aria-pressed="false" hidden>Schéma JSON</button>
           <button type="button" data-tab="tool-example" data-stage="tool" aria-pressed="false" hidden>Exemple JSON</button>
           <button type="button" data-tab="json" aria-pressed="false">JSON</button>

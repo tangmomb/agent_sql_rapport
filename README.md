@@ -45,8 +45,8 @@ ni serveur ni clé API.
 
 ## Générer un rapport
 
-Ouvre PowerShell à la racine du projet, dans le dossier qui contient ce README.
-Si `data/olist.db`, le fichier `.env` renseigné et Pango sont déjà disponibles,
+Ouvre un terminal à la racine du projet, dans le dossier qui contient ce README.
+Si `data/olist.db` et le fichier `.env` renseigné sont déjà disponibles,
 lance directement cette commande.
 
 ```powershell
@@ -63,7 +63,7 @@ commandes livrées à l’heure ou en avance avec ceux des commandes en retard.
 Le modèle par défaut est `mistral-small-2603`. La commande
 `uv run --locked report --help` affiche les réglages possibles.
 
-### Première installation sur Windows
+### Première installation sur Linux ou Windows
 
 1. **Prépare la base.** Avec Python 3.11 ou plus récent et `uv`, télécharge
    manuellement le ZIP Olist et dépose-le dans `data/raw/`. Laisse une seule
@@ -79,34 +79,15 @@ Le modèle par défaut est `mistral-small-2603`. La commande
    `data/olist.db` et `data/data_dictionary.md`. La commande `make setup` lance
    le même import si GNU Make est disponible.
 
-2. **Vérifie le moteur PDF.** WeasyPrint utilise les bibliothèques natives Pango.
-   Pour une installation MSYS2, lance `pacman -S mingw-w64-ucrt-x86_64-pango`
-   dans le shell UCRT64. Dans PowerShell, indique le dossier des DLL si
-   WeasyPrint ne les trouve pas.
-   [Installation de WeasyPrint par plateforme](https://doc.courtbouillon.org/weasyprint/stable/first_steps.html)
+2. **Renseigne la clé Mistral.** Si `.env` n’existe pas encore, crée-le avec
+   `cp .env.example .env` sous Linux ou `Copy-Item .env.example .env` sous
+   PowerShell. Complète la ligne `MISTRAL_API_KEY=` dans ton éditeur. Git
+   ignore ce fichier. `--env-file .env` charge la clé pour la commande.
 
-   ```powershell
-   $env:WEASYPRINT_DLL_DIRECTORIES = 'C:\msys64\ucrt64\bin'
-   uv run --locked python -m weasyprint --info
-   ```
-
-   Adapte le chemin si tes DLL sont ailleurs. Sur le poste utilisé pour les
-   vérifications du projet, elles se trouvent dans
-   `%LOCALAPPDATA%\sql-report-agent-native\pango\Library\bin`. Pour utiliser ce
-   dossier, si tu l’as sur ton poste, exécute ces lignes dans la même session
-   PowerShell que la commande `report`.
-
-   ```powershell
-   $pangoBin = Join-Path $env:LOCALAPPDATA 'sql-report-agent-native\pango\Library\bin'
-   $env:WEASYPRINT_DLL_DIRECTORIES = $pangoBin
-   $env:Path = "$pangoBin;$env:Path"
-   uv run --locked python -m weasyprint --info
-   ```
-
-3. **Renseigne la clé Mistral.** Si `.env` n’existe pas encore, crée-le avec
-   `Copy-Item .env.example .env`, puis complète la ligne `MISTRAL_API_KEY=`
-   dans ton éditeur. Git ignore ce fichier. `--env-file .env` charge la clé
-   pour la commande.
+Sur un VPS, utilise `uv sync --locked --no-dev` pour installer les seules
+dépendances d’exécution. Ajoute aussi `--no-dev` aux commandes `uv run`
+pour garder cet environnement. ReportLab utilise les polices DejaVu fournies
+par Matplotlib et génère le PDF directement.
 
 Une fois les dépendances installées, l’import, les tests et la vérification des
 références SQL fonctionnent hors ligne. Générer un rapport avec Mistral ou
@@ -118,7 +99,6 @@ lancer son benchmark utilise l’API.
 | --- | --- |
 | PowerShell ne reconnaît pas `uv` | Si `uv` est installé comme module de Python 3.13, remplace `uv` par `py -3.13 -m uv` dans les commandes. |
 | Base SQLite absente | Depuis la racine, exécute la commande d’import de l’étape 1 et vérifie que `data/olist.db` a été créé. |
-| Impossible de charger une DLL WeasyPrint | Vérifie le chemin de Pango dans la session PowerShell avec `uv run --locked python -m weasyprint --info`. |
 | `MISTRAL_API_KEY` est absente | Vérifie que la ligne dans `.env` contient une valeur et que la commande inclut `--env-file .env`. |
 
 ## Parcours d’une question
@@ -205,7 +185,7 @@ flowchart LR
     Store --> Chart
     Agent -->|"write_report"| Report["Validation et résolution des valeurs"]
     Store --> Report
-    Chart -->|"PNG"| Render["Jinja2 et WeasyPrint"]
+    Chart -->|"PNG"| Render["ReportLab"]
     Report --> Render
     Render --> PDF["Rapport PDF"]
     Agent --> Trace["Trace JSONL"]
@@ -229,7 +209,7 @@ transmet un rapport validé au moteur PDF.
 | AST SQLGlot et connexion SQLite en lecture seule | Combiner la validation d’un unique `SELECT` ou `WITH … SELECT`, l’autorisation SQLite et les limites d’exécution. |
 | `ResultStore` et aperçu borné | Garder localement les lignes complètes pour les tableaux et graphiques. Le modèle reçoit l’identifiant, les colonnes, les types, le nombre de lignes et jusqu’à cinq exemples. |
 | Références numériques | Résoudre `{{r1.total[0]}}` depuis la première ligne de la colonne `total`. Le rapport signale les nombres saisis en dur sans correspondance SQL. |
-| Matplotlib et template Jinja2 | Générer le PNG et la pagination depuis les données validées. Le texte est échappé avant le rendu HTML et les PNG sont intégrés au document. |
+| Matplotlib et ReportLab | Générer les graphiques PNG, mettre en page le rapport validé et écrire le PDF. |
 | Traçage JSONL | Inspecter les messages, les appels d’outils, les latences et les compteurs de tokens. Une grille tarifaire connue fournit une estimation en USD. |
 
 ### Guide de lecture du code
@@ -240,7 +220,7 @@ transmet un rapport validé au moteur PDF.
 | Ce que lance la commande `report` | [CLI](src/sql_report_agent/cli.py), puis `AnalysisAgent.run_report()` dans [la boucle](src/sql_report_agent/agent/loop.py). |
 | Comment Python et Mistral dialoguent | [Contrat LLMClient](src/sql_report_agent/llm/base.py) et [adaptateur HTTP Mistral](src/sql_report_agent/llm/mistral.py). |
 | Comment un appel d’outil est exécuté | [Outils exposés](src/sql_report_agent/tools/registry.py), [validation SQL](src/sql_report_agent/tools/sql.py) et [stockage des résultats](src/sql_report_agent/store.py). |
-| Comment se construit le PDF | [Graphiques](src/sql_report_agent/tools/charts.py), [validation du rapport](src/sql_report_agent/tools/report.py), [template HTML](src/sql_report_agent/render/template.html.jinja) et [rendu PDF](src/sql_report_agent/render/pdf.py). |
+| Comment se construit le PDF | [Graphiques](src/sql_report_agent/tools/charts.py), [validation du rapport](src/sql_report_agent/tools/report.py) et [rendu PDF](src/sql_report_agent/render/pdf.py). |
 | Comment vérifier le résultat | [Trace et relecture](src/sql_report_agent/tracing.py), puis [calcul des scores](src/sql_report_agent/evaluation.py). |
 
 Le [test de la boucle](tests/test_agent.py) montre quels messages sont envoyés
@@ -384,4 +364,5 @@ uv run --locked pytest
 
 Les tests couvrent l’import, les bornes SQL, la boucle pilotée par un faux modèle,
 l’adaptateur HTTP simulé, les graphiques, le rapport et la comparaison de
-configurations. Le test de création PDF s’exécute lorsque Pango est disponible.
+configurations. Les tests PDF vérifient le texte, les graphiques, les tableaux
+sur plusieurs pages et la numérotation.

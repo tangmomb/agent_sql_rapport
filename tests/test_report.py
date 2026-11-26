@@ -2,19 +2,19 @@ import json
 from pathlib import Path
 
 import pytest
+from pypdf import PdfReader
 
 from sql_report_agent.agent.loop import AnalysisAgent
 from sql_report_agent.llm.base import ChatResponse, Message, ToolCall
-from sql_report_agent.render.pdf import PdfError, PdfRenderer, render_html
+from sql_report_agent.render.pdf import PdfRenderer
 from sql_report_agent.store import ResultStore
 from sql_report_agent.tools.charts import CHART_TYPES, ChartError, ChartStore
 from sql_report_agent.tools.report import ReportError, prepare_report
+from sql_report_agent.tools.sql import SqlResult
 
 
 @pytest.fixture
 def report_data(tmp_path: Path) -> tuple[ResultStore, ChartStore]:
-    from sql_report_agent.tools.sql import SqlResult
-
     results = ResultStore()
     results.add(
         SqlResult(
@@ -124,8 +124,8 @@ def test_rejects_incompatible_chart_data(report_data: tuple[ResultStore, ChartSt
     assert not charts.directory.exists()
 
 
-def test_html_embeds_chart_escapes_prose_and_marks_warnings(
-    report_data: tuple[ResultStore, ChartStore],
+def test_pdf_embeds_chart_displays_prose_as_text_and_marks_warnings(
+    tmp_path: Path, report_data: tuple[ResultStore, ChartStore]
 ) -> None:
     _, charts = report_data
     chart = charts.create("r1", "bar", "groupe", "total", "Comparaison")
@@ -144,26 +144,33 @@ def test_html_embeds_chart_escapes_prose_and_marks_warnings(
         },
         *report_data,
     )
-    html = render_html(report)
-    assert "Comparaison &lt;données&gt;" in html
-    assert '<img src="file:' not in html
-    assert "data:image/png;base64," in html
-    assert "Chiffres à vérifier" in html
-    assert "Synthèse (999)" in html
-    assert "3500" in html and "Ponctuel" in html
-    assert "{{r1" not in html
+    output = PdfRenderer().write(report, tmp_path / "comparaison.pdf")
+    pdf = PdfReader(output)
+    text = "\n".join(page.extract_text() for page in pdf.pages)
+    assert "Comparaison <données>" in text
+    assert '<img src="file:///local.txt">' in text
+    assert sum(len(page.images) for page in pdf.pages) == 1
+    assert "Chiffres à vérifier" in text
+    assert "Synthèse (999)" in text
+    assert "3500" in text and "Ponctuel" in text
+    assert "{{r1" not in text
 
 
 def test_pdf_creation(tmp_path: Path, report_data: tuple[ResultStore, ChartStore]) -> None:
-    try:
-        renderer = PdfRenderer()
-    except PdfError as error:
-        pytest.skip(str(error))
+    renderer = PdfRenderer()
+    results, _ = report_data
+    table_id = results.add(
+        SqlResult(
+            ("libelle", "total"),
+            ("text", "integer"),
+            tuple((f"Ligne-A-{index:03d}", index) for index in range(1, 61)),
+        )
+    )
     report = prepare_report(
         {
             "title": "Délais et avis",
             "summary": "{{r1.total[0]}} commandes.",
-            "sections": [{"heading": "Détail", "text": "São Paulo", "table_result_id": "r1"}],
+            "sections": [{"heading": "Détail", "text": "São Paulo", "table_result_id": table_id}],
         },
         *report_data,
     )
@@ -172,6 +179,15 @@ def test_pdf_creation(tmp_path: Path, report_data: tuple[ResultStore, ChartStore
     data = output.read_bytes()
     assert data.startswith(b"%PDF-") and data.rstrip().endswith(b"%%EOF")
     assert list(output.parent.iterdir()) == [output]
+    pdf = PdfReader(output)
+    assert len(pdf.pages) >= 2
+    page_text = [page.extract_text() for page in pdf.pages]
+    assert "São Paulo" in page_text[0]
+    assert all("libelle" in page for page in page_text)
+    assert f"1 / {len(pdf.pages)}" in page_text[0]
+    assert f"{len(pdf.pages)} / {len(pdf.pages)}" in page_text[-1]
+    assert "Ligne-A-050" in page_text[-1] and "Ligne-A-051" not in "\n".join(page_text)
+    assert "50 premières lignes sur 60." in page_text[-1]
 
 
 def test_agent_retries_invalid_report_and_stops_on_valid_tool_call(tmp_path: Path) -> None:

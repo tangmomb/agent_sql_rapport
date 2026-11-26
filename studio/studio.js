@@ -8,17 +8,17 @@ const stages = {
   list_tables: { label: "list_tables", tool: true,
     about: "Liste les noms des tables et des vues SQLite. Le LLM peut utiliser ces noms dans describe_table ou dans une requête SQL." },
   describe_table: { label: "describe_table", tool: true,
-    about: "Décrit une table ou une vue à partir de son nom exact. Le résultat contient ses colonnes, leurs types, les clés et jusqu’à trois lignes d’exemple." },
+    about: "Le LLM fournit le nom d’une table ou d’une vue. Le code vérifie qu’elle existe dans SQLite, puis renvoie ses colonnes, leurs types, les clés et jusqu’à trois lignes d’exemple." },
   get_data_dictionary: { label: "get_data_dictionary", tool: true,
     about: "Lit le dictionnaire Olist. Il indique ce que représente une ligne, comment relier les tables et quels pièges peuvent fausser les agrégats." },
   run_sql: { label: "run_sql", tool: true,
-    about: "Valide et exécute un SELECT dans SQLite. Le résultat complet reste dans ResultStore. Le LLM reçoit son identifiant et jusqu’à cinq lignes d’aperçu." },
+    about: "Le LLM prépare une requête SQL. Le code vérifie qu’il s’agit d’un seul SELECT en lecture seule, puis l’exécute dans SQLite. Il stocke le résultat complet dans ResultStore et renvoie au LLM son identifiant et jusqu’à cinq lignes d’aperçu." },
   create_chart: { label: "create_chart", tool: true,
-    about: "Matplotlib utilise les colonnes du résultat SQL pour générer un PNG. Le modèle associe ensuite le graphique au rapport par son identifiant." },
+    about: "Le LLM choisit un résultat SQL, un type de graphique, les colonnes à tracer et un titre. Le code vérifie les paramètres et la compatibilité des données, puis génère le PNG avec Matplotlib. Le LLM reçoit l’identifiant du graphique pour l’inclure dans le rapport." },
   write_report: { label: "write_report", tool: true,
-    about: "Valide le brouillon, résout les références SQL et signale les chiffres sans source. Lorsque le rapport est accepté, l’analyse se termine et la commande produit le PDF." },
-  pdf: { label: "PDF", sub: "Jinja2 · WeasyPrint", glyph: "PDF", local: true,
-    about: "La commande report transforme le rapport validé en HTML puis en PDF. Cette étape aval se déroule après la fin de la trace de l’agent." },
+    about: "Le LLM rédige un brouillon structuré et fournit ses références aux résultats SQL et aux graphiques. Le code valide le format, résout les références et signale les chiffres non reliés à un résultat SQL. Une fois le rapport accepté, l’analyse se termine et la commande produit le PDF." },
+  pdf: { label: "PDF", sub: "ReportLab", glyph: "PDF", local: true,
+    about: "ReportLab transforme le rapport validé en PDF. Le rendu intervient après la fin de la trace de l’agent, c’est-à-dire après validation de l’outil write_report." },
 };
 
 const byId = (id) => document.getElementById(id);
@@ -111,10 +111,10 @@ function renderHeader() {
   const start = state.events.find((event) => event.event === "run_start");
   const end = endEvent();
   const status = end?.status || (end?.event === "run_aborted" ? "aborted" : "partial");
-  byId("run-source").textContent = state.source;
   byId("question").textContent = start?.question || "Question absente de cette trace.";
-  byId("run-status").textContent = displayStatus(status);
-  byId("run-status").dataset.state = status === "completed" ? "complete" : "issue";
+  const runStatus = byId("run-status");
+  runStatus.textContent = `${state.source} · ${displayStatus(status)}`;
+  runStatus.dataset.state = status;
   const values = [
     ["Appels au modèle", end?.steps ?? state.events.filter((event) => event.event === "model_call").length],
     ["Appels d’outils", end?.tool_calls ?? state.events.filter((event) => event.event === "tool_call").length],
@@ -172,12 +172,6 @@ function renderTimeline() {
     listItem.append(item);
     timeline.append(listItem);
   }
-}
-
-function parseArguments(event) {
-  const args = event.arguments;
-  if (typeof args !== "string") return args;
-  try { return JSON.parse(args); } catch { return args; }
 }
 
 function block(parent, label, content) {
@@ -258,16 +252,21 @@ function toolCall(id, name, args) {
   return { id, type: "function", function: { name, arguments: args } };
 }
 
+function renderToolExchange(panel, call, response) {
+  block(panel, "Appel de l’outil", json(call));
+  block(panel, "Réponse de l’outil", response === undefined
+    ? "Réponse absente de la trace." : json(response));
+}
+
 function renderToolExample(panel, name, event) {
   const inTrace = event?.event === "tool_call";
   const events = inTrace ? state.events : DEMO_TRACE;
   const example = inTrace ? event : events.find((entry) => entry.event === "tool_call" && entry.name === name);
   if (!example) {
     const { id, args, output } = DEMO_TOOL_EXAMPLES[name];
-    block(panel, "Exemple illustratif", json({
-      call: toolCall(id, name, JSON.stringify(args)),
-      response: { role: "tool", tool_call_id: id, name, content: JSON.stringify(output) },
-    }));
+    panel.append(element("p", "", "Exemple illustratif."));
+    renderToolExchange(panel, toolCall(id, name, JSON.stringify(args)),
+      { role: "tool", tool_call_id: id, name, content: JSON.stringify(output) });
     return;
   }
 
@@ -286,91 +285,16 @@ function renderToolExample(panel, name, event) {
     if (response) break;
   }
   if (!inTrace) panel.append(element("p", "", "Exemple tiré de la démonstration."));
-  if (!response) panel.append(element("p", "", "La réponse affichée est la sortie locale enregistrée."));
-  panel.append(json({ call, response: response ?? example.output }));
+  if (!response && example.output !== undefined) {
+    panel.append(element("p", "", "La réponse affichée est la sortie locale enregistrée."));
+  }
+  renderToolExchange(panel, call, response ?? example.output);
 }
 
 function chips(parent, values) {
   const container = element("div", "chips");
   for (const value of values.filter(Boolean)) container.append(element("span", "chip", value));
   if (container.childElementCount) parent.append(container);
-}
-
-function previewTable(output) {
-  if (!Array.isArray(output?.columns) || !Array.isArray(output?.rows)) return null;
-  const wrapper = element("div", "data-table");
-  const table = element("table");
-  const headings = table.createTHead().insertRow();
-  for (const column of output.columns) {
-    const header = element("th", "", column);
-    header.scope = "col";
-    headings.append(header);
-  }
-  const body = table.createTBody();
-  for (const row of output.rows) {
-    if (!Array.isArray(row)) continue;
-    const cells = body.insertRow();
-    for (const value of row) cells.append(element("td", "", value ?? "NULL"));
-  }
-  wrapper.append(table);
-  return wrapper;
-}
-
-function miniBars(args) {
-  if (args?.chart_type !== "bar") return null;
-  const result = state.events.slice(0, state.index).findLast((item) => item.name === "run_sql"
-    && item.output?.result_id === args.result_id)?.output;
-  if (!Array.isArray(result?.rows) || !Array.isArray(result.columns)) return null;
-  const x = result.columns.indexOf(args.x);
-  const y = result.columns.indexOf(args.y);
-  if (x === -1 || y === -1) return null;
-  const rows = result.rows.filter((row) => Array.isArray(row) && Number.isFinite(row[y]) && row[y] >= 0);
-  const scale = rows.reduce((maximum, row) => Math.max(maximum, row[y]), 0);
-  if (!scale) return null;
-  const chart = element("div", "mini-bars");
-  for (const row of rows) {
-    const group = element("div", "bar-row");
-    const label = element("div", "bar-label");
-    label.append(element("span", "", row[x] ?? "NULL"), element("strong", "", number.format(row[y])));
-    const track = element("div", "bar-track");
-    const fill = element("span");
-    fill.style.width = `${100 * row[y] / scale}%`;
-    track.setAttribute("aria-hidden", "true");
-    track.append(fill);
-    group.append(label, track);
-    chart.append(group);
-  }
-  return chart;
-}
-
-function renderTool(panel, event) {
-  const args = parseArguments(event);
-  const output = event.output;
-  if (output?.error) {
-    block(panel, "Erreur renvoyée au modèle", output.error);
-    if (args !== undefined) block(panel, "Arguments", json(args));
-    return;
-  }
-  if (event.name === "run_sql") {
-    chips(panel, [output?.result_id, Number.isInteger(output?.row_count) && `${output.row_count} lignes`]);
-    block(panel, "Aperçu des lignes", previewTable(output));
-    if (typeof args?.query === "string") block(panel, "Requête SQL", code(args.query, "sql"));
-    if (output?.truncated) block(panel, "Aperçu tronqué", "Le résultat complet est resté dans le processus Python.");
-  } else if (event.name === "get_data_dictionary") {
-    block(panel, "Extrait du dictionnaire", code(output?.dictionary || output?.preview || "Texte absent de la trace."));
-  } else if (event.name === "create_chart") {
-    chips(panel, [output?.chart_id, output?.result_id, args?.chart_type]);
-    const chart = miniBars(args);
-    if (chart) block(panel, "Aperçu des barres à partir des lignes tracées", chart);
-    if (args !== undefined) block(panel, "Paramètres", json(args));
-  } else if (event.name === "write_report") {
-    block(panel, "Titre proposé", args?.report?.title);
-    block(panel, "Synthèse du brouillon", args?.report?.summary);
-    if (output) block(panel, "Validation", json(output));
-  } else {
-    if (args !== undefined) block(panel, "Entrée", json(args));
-    if (output !== undefined) block(panel, "Sortie", json(output));
-  }
 }
 
 function quotePowerShell(value) {
@@ -434,7 +358,8 @@ function renderInspector() {
   for (const button of tabs) {
     const { stage: scope, tab } = button.dataset;
     if (tab === "json") button.textContent = state.stage === "model" ? "Exemple d’appel LLM" : "JSON";
-    button.hidden = (scope === "tool" && !stage.tool) || (tab === "json" && Boolean(stage.tool))
+    button.hidden = (scope === "tool" && !stage.tool)
+      || (tab === "json" && Boolean(stage.tool || state.stage === "pdf"))
       || Boolean(scope && scope !== "tool" && scope !== state.stage);
     if (button.hidden && tab === state.tab) state.tab = "overview";
   }
@@ -457,6 +382,16 @@ function renderInspector() {
     renderPrompt(panel, event);
     return;
   }
+  if (state.tab === "reportlab") {
+    const intro = element("p");
+    intro.append("Dans notre code, ", element("code", "", "write_report"), " reçoit la clé JSON ",
+      element("code", "", "title"), ". Après validation, elle devient ",
+      element("code", "", "report.title"), " dans un objet Python. On associe ensuite explicitement ce texte à un style ReportLab :");
+    const detail = element("p");
+    detail.append("Le style ", element("code", "", "title"), " définit la police, la taille (33 points) et l’espacement. Python assemble de la même façon les paragraphes, les tableaux et les images dans l’ordre voulu. ReportLab met ces blocs en page et génère le PDF.");
+    panel.append(intro, code('_paragraph(report.title, styles["title"])'), detail);
+    return;
+  }
   if (state.tab === "tool-schema") {
     renderToolSchema(panel, state.stage, event?.step);
     return;
@@ -470,7 +405,12 @@ function renderInspector() {
     else panel.append(event ? json(event) : element("p", "", "Aucun événement JSON enregistré pour cette étape."));
     return;
   }
-  panel.append(element("h3", "", stage.label), element("p", "", stage.about));
+  if (event?.event === "run_end") {
+    panel.append(element("h3", "", "Fin de l’analyse"));
+  } else {
+    panel.append(element("h3", "", stage.label), element("p", "", stage.about));
+    if (stage.tool) return;
+  }
   if (state.stage === "pdf") {
     block(panel, "État", state.demo ? "Le PDF a été généré pour cette démonstration."
       : "La trace JSONL importée ne permet pas de confirmer qu’un fichier PDF a été écrit.");
@@ -497,9 +437,6 @@ function renderInspector() {
       }
       if (event.error) block(panel, "Erreur", event.error);
       if (event.usage) block(panel, "Compteurs de tokens", json(event.usage));
-      break;
-    case "tool_call":
-      renderTool(panel, event);
       break;
     case "run_end":
       block(panel, "Synthèse après validation", event.answer);
@@ -592,15 +529,15 @@ function parseTrace(raw) {
 }
 
 setupMap();
-loadTrace(DEMO_TRACE, "DÉMONSTRATION OLIST · CLIENT SCRIPTÉ", true);
-byId("demo-button").addEventListener("click", () => loadTrace(DEMO_TRACE, "DÉMONSTRATION OLIST · CLIENT SCRIPTÉ", true));
+loadTrace(DEMO_TRACE, "Exemple Olist", true);
+byId("demo-button").addEventListener("click", () => loadTrace(DEMO_TRACE, "Exemple Olist", true));
 byId("trace-file").addEventListener("change", async (event) => {
   const input = event.currentTarget;
   const file = input.files[0];
   if (!file) return;
   try {
     if (file.size > 16_000_000) throw new Error("Le fichier dépasse la limite d’import de 16 Mo.");
-    loadTrace(parseTrace(await file.text()), `TRACE LOCALE · ${file.name}`);
+    loadTrace(parseTrace(await file.text()), file.name);
   } catch (error) {
     byId("import-error").textContent = error.message;
     byId("import-error").hidden = false;

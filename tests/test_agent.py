@@ -47,7 +47,9 @@ def requested(*calls: ToolCall) -> ChatResponse:
 
 
 @pytest.mark.parametrize("writes_report", [True, False])
-def test_report_reserves_last_call_for_finalization(tmp_path: Path, writes_report: bool) -> None:
+def test_report_reserves_last_call_for_finalization(
+    tmp_path: Path, local_database: SqlTools, writes_report: bool
+) -> None:
     exploration = tool_call("call-02", "run_sql", query="SELECT 999 AS total")
     final_calls = [exploration]
     if writes_report:
@@ -67,7 +69,9 @@ def test_report_reserves_last_call_for_finalization(tmp_path: Path, writes_repor
         requested(*final_calls),
     )
 
-    result = AnalysisAgent(client, runs_dir=tmp_path, max_steps=2).run_report("Analyse.")
+    result = AnalysisAgent(client, sql=local_database, runs_dir=tmp_path, max_steps=2).run_report(
+        "Analyse."
+    )
 
     assert result.steps == 2
     assert len(result.store) == 1
