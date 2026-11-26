@@ -81,6 +81,7 @@ def test_correct_exploration_does_not_score_if_report_cites_wrong_value(
         _requested("run_sql", query=case.sql),
         _requested("run_sql", query="SELECT COUNT(*) + 1 AS n FROM sample"),
         _report("r2", extra_literal=True),
+        _report("r2"),
     )
     result = AnalysisAgent(client, sql=SqlTools(fixture_db), runs_dir=tmp_path).run_report(
         case.prompt()
@@ -89,8 +90,8 @@ def test_correct_exploration_does_not_score_if_report_cites_wrong_value(
     assert result.store.get("r1").rows == ((2,),)
     assert score.report_result_ids == ("r2",)
     assert not score.correct
-    assert score.figure_fidelity == 0.5
-    assert score.total_tokens == 150
+    assert score.figure_fidelity == 1
+    assert score.total_tokens == 200
     assert score.estimated_cost_usd is None
 
 

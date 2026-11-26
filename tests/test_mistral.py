@@ -14,7 +14,7 @@ from sql_report_agent.tracing import replay_run
 
 @pytest.mark.parametrize(
     ("cache_details", "cached_tokens", "cost"),
-    [({}, 0, 0.000174), ({"prompt_tokens_details": {"cached_tokens": 512}}, 512, 0.00010488)],
+    [({}, 0, 0.000348), ({"prompt_tokens_details": {"cached_tokens": 512}}, 512, 0.000197984)],
 )
 def test_mistral_round_trip(
     monkeypatch: pytest.MonkeyPatch,
@@ -70,6 +70,7 @@ def test_mistral_round_trip(
         assert payload["max_tokens"] == 500
         assert payload["messages"] == [message.to_payload() for message in messages]
         assert payload["tools"] == [tool.to_payload() for tool in tools]
+        assert "prompt_cache_key" not in payload
         return io.BytesIO(json.dumps(body).encode())
 
     monkeypatch.setattr(mistral, "urlopen", send)
@@ -122,12 +123,17 @@ def test_run_traces_exact_mistral_request(
 
     monkeypatch.setattr(mistral, "urlopen", send)
     client = mistral.MistralClient("requested-model", max_tokens=731)
-    result = AnalysisAgent(client, runs_dir=tmp_path).run("Analyse.")
+    agent = AnalysisAgent(client, runs_dir=tmp_path)
+    result = agent.run("Analyse.")
+    next_run = agent.run("Analyse.")
 
     records = map(json.loads, result.trace_path.read_text(encoding="utf-8").splitlines())
     event = next(record for record in records if record["event"] == "model_call")
     assert event["request"] == sent[0]
     assert event["request"]["max_tokens"] == 731
+    assert event["request"]["prompt_cache_key"] == f"sql-report-{result.run_id}"
+    assert sent[1]["prompt_cache_key"] == f"sql-report-{next_run.run_id}"
+    assert sent[1]["prompt_cache_key"] != sent[0]["prompt_cache_key"]
     assert "test-key" not in json.dumps(event)
     assert any(
         line.startswith("  Requête  ") for line in replay_run(tmp_path, result.run_id, verbose=True)

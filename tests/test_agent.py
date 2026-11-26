@@ -78,9 +78,9 @@ def test_report_reserves_last_call_for_finalization(
     assert "run_sql" in {tool.name for tool in client.requests[0][1]}
     messages, tools = client.requests[1]
     assert [tool.name for tool in tools] == ["write_report"]
-    assert "Dernier appel modèle" in (messages[0].content or "")
-    assert "Règles métier Olist" in (messages[0].content or "")
-    assert messages[-1].tool_call_id == "call-01"
+    assert messages[: len(client.requests[0][0])] == client.requests[0][0]
+    assert messages[-2].tool_call_id == "call-01"
+    assert "Dernier appel modèle" in (messages[-1].content or "")
     events = [json.loads(line) for line in result.trace_path.read_text().splitlines()]
     rejected = next(event for event in events if event.get("tool_call_id") == "call-02")
     assert "error" in rejected["output"]

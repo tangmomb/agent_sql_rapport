@@ -55,12 +55,22 @@ Le terminal affiche le chemin du PDF et l’identifiant de la trace. Le fichier
 `rapport.pdf` apparaît dans le dossier courant. Pour l’ouvrir sous Windows,
 utilise `Invoke-Item .\rapport.pdf`.
 
+Ajoute `--review-data` pour vérifier la synthèse avant le rendu du PDF. Le juge
+reçoit la demande et les requêtes d’origine. Il peut interroger SQLite en lecture
+seule et transmettre une preuve à Construct. L’agent tente une correction, puis
+fait vérifier la nouvelle synthèse. La livraison exige un verdict positif quand
+cette option est activée.
+
 Ajoute `--review-pdf` pour demander une relecture visuelle après la création
-du fichier. La commande envoie à Mistral la question et les images du PDF,
+du fichier. La commande envoie au juge la question et les images du PDF,
 par lots de quatre pages au maximum.
-Mistral Large 4 (`mistral-large-4-0`) signale les défauts de mise en page et
-propose des corrections, sans modifier le PDF.
-`--review-model` permet de choisir un autre modèle multimodal.
+Si le juge signale un défaut qui gêne la lecture, le modèle d’analyse reçoit
+l’avis dans le même fil et peut rappeler `write_report` une fois. Le PDF révisé
+remplace le PDF initial si le juge valide toutes ses pages.
+Combine `--review-data --review-pdf` pour activer les deux passes. `--review-model`
+choisit le modèle des juges.
+`--model gpt-6.2-sol --review-model gpt-6.2-sol` utilise l’API OpenAI pour
+Construct et les deux juges, avec `OPENAI_API_KEY` dans `.env`.
 
 Dans le Studio, importe la trace de cette exécution et sélectionne **Juge
 visuel** dans la chronologie. L’onglet **À ce tour précis** affiche le lot
@@ -71,7 +81,9 @@ et l’erreur apparaît dans la trace.
 Un exemple généré pendant le développement est disponible dans
 `output/pdf/rapport-olist-2017.pdf` sur ce poste. Il compare les avis des
 commandes livrées à l’heure ou en avance avec ceux des commandes en retard.
-Le modèle par défaut est `mistral-small-2603`. La commande
+Le modèle par défaut est `deepseek-v4-1-flash-1017`, hébergé par Mistral.
+L’estimation utilise 0,30 USD en entrée, 1,20 USD en sortie et 0,007 USD en entrée
+servie depuis le cache, par million de tokens. La commande
 `uv run --locked report --help` affiche les réglages possibles.
 
 ### Première installation sur Linux ou Windows
@@ -140,10 +152,10 @@ Pour citer la première note moyenne, le brouillon utilise
 - `note_moyenne` désigne la colonne.
 - `[0]` désigne la première ligne.
 
-Python remplace la référence par `4.28` au moment de la validation. Une
-référence à une cellule inexistante provoque une erreur que le modèle peut
-corriger. Un nombre écrit en dur et absent des résultats apparaît dans
-**Chiffres à vérifier**. Les tableaux et graphiques sont construits à partir du
+Python remplace la référence par `4.28` au moment de la validation. Si une
+référence est introuvable ou qu’un nombre est saisi directement, `write_report`
+refuse le brouillon et indique les champs à corriger.
+Les tableaux et graphiques sont construits à partir du
 résultat complet conservé localement, y compris quand l’aperçu donné au modèle
 s’arrête après cinq lignes.
 
@@ -219,7 +231,7 @@ transmet un rapport validé au moteur PDF.
 | `LLMClient` et boucle Python | Tester les appels successifs avec un client scripté et isoler l’adaptateur HTTP Mistral. |
 | AST SQLGlot et connexion SQLite en lecture seule | Combiner la validation d’un unique `SELECT` ou `WITH … SELECT`, l’autorisation SQLite et les limites d’exécution. |
 | `ResultStore` et aperçu borné | Garder localement les lignes complètes pour les tableaux et graphiques. Le modèle reçoit l’identifiant, les colonnes, les types, le nombre de lignes et jusqu’à cinq exemples. |
-| Références numériques | Résoudre `{{r1.total[0]}}` depuis la première ligne de la colonne `total`. Le rapport signale les nombres saisis en dur sans correspondance SQL. |
+| Références numériques | Résoudre `{{r1.total[0]}}` depuis la première ligne de la colonne `total`. La validation refuse les nombres saisis directement dans le texte. |
 | Matplotlib et ReportLab | Générer les graphiques PNG, mettre en page le rapport validé et écrire le PDF. |
 | Traçage JSONL | Inspecter les messages, les appels d’outils, les latences et les compteurs de tokens. Une grille tarifaire connue fournit une estimation en USD. |
 
@@ -237,7 +249,7 @@ transmet un rapport validé au moteur PDF.
 Le [test de la boucle](tests/test_agent.py) montre quels messages sont envoyés
 au modèle et quelles lignes restent dans le `ResultStore`. Les
 [tests du rapport](tests/test_report.py) montrent la résolution des références
-et l’affichage des chiffres à vérifier. Les
+et le refus des nombres saisis directement. Les
 [tests de l’évaluation](tests/test_evaluation.py) montrent comment un résultat
 utilisé dans le rapport est comparé à la référence SQL.
 
@@ -345,15 +357,17 @@ Les sorties locales de ces exécutions se trouvent dans
 ## Limites connues
 
 - La fenêtre de contexte du modèle s’applique à l’historique complet envoyé à
-  chaque appel. Le fournisseur fournit ses compteurs effectifs après l’appel.
+  chaque appel. Le client envoie une clé de cache stable par exécution, avec une
+  clé distincte pour le juge visuel. Mistral fournit le nombre de tokens
+  effectivement réutilisés après chaque appel.
 - Les requêtes ont un délai par défaut de cinq secondes, une limite de
   10 000 lignes et un plafond de volume estimé. Les grandes extractions
   nécessitent une agrégation ou un filtre. Un tableau PDF affiche jusqu’à
   huit colonnes et les 50 premières lignes.
 - La vérification numérique contrôle la présence des valeurs et la validité
   des références. L’interprétation, l’unité et la causalité restent à examiner
-  dans le rapport. Le coût est une estimation aux tarifs standard, sans
-  remise de cache.
+  dans le rapport. Le coût est estimé aux tarifs standard en tenant compte des
+  tokens mis en cache lorsque leur tarif est connu.
 - L’évaluation porte sur 30 questions cadrées et sur une archive historique.
   Les scores sont conditionnés par les définitions des cohortes et des
   agrégats formulées dans les questions.

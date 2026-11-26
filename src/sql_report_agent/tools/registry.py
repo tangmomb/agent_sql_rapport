@@ -167,7 +167,8 @@ def report_tools(results: ResultStore, charts: ChartStore) -> tuple[Tool, ...]:
         Tool(
             ToolSpec(
                 "write_report",
-                "Valide et termine le rapport. Référence les chiffres avec {{r1.colonne[0]}}.",
+                "Valide le rapport. Chaque nombre dans les titres, la synthèse et le texte "
+                "doit être fourni par une référence SQL comme {{r1.colonne[0]}}.",
                 _object_schema({"report": report}),
             ),
             lambda args: prepare_report(args["report"], results, charts),

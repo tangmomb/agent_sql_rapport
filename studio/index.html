@@ -42,7 +42,7 @@
         C'est ceci que nous explorons ci-dessous.</p>
       <div class="metric-row">
         <div class="execution-metrics" id="metrics" role="group" aria-label="Mesures de l’exécution"></div>
-        <div class="model-metrics" id="model-metrics" role="group" aria-label="Consommation et coût par modèle" title="Un tiret indique une mesure indisponible."></div>
+        <div class="model-metrics" id="model-metrics" role="group" aria-label="Consommation et coût par modèle" title="Ordre des valeurs : Construct, juge des données, juge visuel. Un tiret indique une mesure indisponible."></div>
       </div>
       <p class="error-banner" id="import-error" role="alert" hidden></p>
     </section>
@@ -51,6 +51,14 @@
       <aside class="panel timeline-panel" aria-labelledby="timeline-title">
         <header class="panel-header">
           <div><h2 id="timeline-title">Chronologie</h2><p id="event-count"></p></div>
+          <span class="panel-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24">
+              <path d="M12 13m-7 0a7 7 0 1 0 14 0a7 7 0 1 0 -14 0" />
+              <path d="M12 10l0 3l2 0" />
+              <path d="M7 4l-2.75 2" />
+              <path d="M17 4l2.75 2" />
+            </svg>
+          </span>
         </header>
         <div class="filters" id="filters" aria-label="Filtrer les événements">
           <button type="button" data-filter="all" aria-pressed="true">Tous</button>
@@ -64,6 +72,16 @@
         <header class="panel-header graph-header">
           <div><h2 id="graph-title">Carte du pipeline</h2><p>Sélectionne une étape pour voir son rôle.</p></div>
           <div class="player" aria-label="Contrôles de lecture">
+            <span class="panel-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24">
+                <path d="M8 3h-5v5" />
+                <path d="M16 3h5v5" />
+                <path d="M3 3l7.536 7.536a5 5 0 0 1 1.464 3.534v6.93" />
+                <path d="M18 6.01v-.01" />
+                <path d="M16 8.02v-.01" />
+                <path d="M14 10v.01" />
+              </svg>
+            </span>
             <button type="button" id="previous" aria-label="Événement précédent" title="Précédent">‹</button>
             <button type="button" id="play" aria-label="Lire la trace" title="Lire la trace">▷</button>
             <button type="button" id="next" aria-label="Événement suivant" title="Suivant">›</button>
@@ -74,12 +92,31 @@
             <div class="wire main-wire"></div>
             <div class="wire tool-spine"></div>
             <div class="tool-row" id="tool-row"></div>
+            <svg class="revision-wire">
+              <defs>
+                <path id="data-revision-curve"></path>
+                <path id="revision-curve"></path>
+              </defs>
+              <g id="data-revision-link" class="revision-link" role="button" tabindex="0" aria-label="Retour du juge des données vers Construct">
+                <title>Un écart dans la synthèse peut déclencher un retour à Construct.</title>
+                <use href="#data-revision-curve" class="revision-hit"></use>
+                <use href="#data-revision-curve" class="revision-line"></use>
+                <path id="data-revision-tip" class="revision-tip"></path>
+              </g>
+              <g id="revision-link" class="revision-link" role="button" tabindex="0" aria-label="Retour du juge visuel vers Construct">
+                <title>Un défaut de lisibilité peut déclencher un retour à Construct.</title>
+                <use href="#revision-curve" class="revision-hit"></use>
+                <use href="#revision-curve" class="revision-line"></use>
+                <path id="revision-tip" class="revision-tip"></path>
+              </g>
+            </svg>
           </div>
         </div>
         <footer class="graph-footer">
           <span><i class="legend model-legend" aria-hidden="true"></i> LLM</span>
           <span><i class="legend tool-legend" aria-hidden="true"></i> Outils</span>
-          <span><i class="legend unobserved-legend" aria-hidden="true"></i> Étape non observée dans la trace actuelle</span>
+          <span><i class="legend unused-tool-legend" aria-hidden="true"></i> Outil non utilisé dans la trace</span>
+          <span><i class="legend revision-legend" aria-hidden="true"></i> Retour hypothétique au LLM constructeur</span>
           <span id="position"></span>
         </footer>
       </section>
@@ -87,6 +124,12 @@
       <aside class="panel inspector-panel" aria-labelledby="inspector-title">
         <header class="panel-header">
           <div><h2 id="inspector-title">Inspecteur</h2><p id="selection-label"></p></div>
+          <span class="panel-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24">
+              <path d="M10 10m-7 0a7 7 0 1 0 14 0a7 7 0 1 0 -14 0" />
+              <path d="M21 21l-6 -6" />
+            </svg>
+          </span>
         </header>
         <div class="filters tabs" id="tabs" aria-label="Vue de l’inspecteur">
           <button type="button" data-tab="overview" aria-pressed="true">Aperçu</button>

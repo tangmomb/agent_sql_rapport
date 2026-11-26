@@ -3,7 +3,7 @@
 import math
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Literal, Protocol
+from typing import Literal, Protocol, runtime_checkable
 
 Role = Literal["system", "user", "assistant", "tool"]
 
@@ -134,4 +134,11 @@ class ChatResponse:
 class LLMClient(Protocol):
     def chat(self, messages: Sequence[Message], tools: Sequence[ToolSpec]) -> ChatResponse:
         """Retourner le message du modèle et ses statistiques disponibles."""
+        ...
+
+
+@runtime_checkable
+class RunScopedClient(LLMClient, Protocol):
+    def for_run(self, run_id: str) -> LLMClient:
+        """Retourner un client configuré pour cette exécution."""
         ...

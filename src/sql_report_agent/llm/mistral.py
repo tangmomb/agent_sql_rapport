@@ -4,8 +4,10 @@ import json
 import math
 import os
 from collections.abc import Sequence
+from copy import copy
 from dataclasses import replace
 from http.client import HTTPException
+from typing import Self
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
@@ -20,11 +22,12 @@ from sql_report_agent.llm.base import (
 )
 
 MISTRAL_ENDPOINT = "https://api.mistral.ai/v1/chat/completions"
-DEFAULT_MODEL = "mistral-small-2603"
+DEFAULT_MODEL = "deepseek-v4-1-flash-1017"
 DEFAULT_REVIEW_MODEL = "mistral-large-4-0"
 _LARGE_4_PRICING = TokenPricing(0.70, 2.10, cached_input_usd_per_million=0.07)
 STANDARD_PRICING = {
-    DEFAULT_MODEL: TokenPricing(0.15, 0.60, cached_input_usd_per_million=0.015),
+    DEFAULT_MODEL: TokenPricing(0.30, 1.20, cached_input_usd_per_million=0.007),
+    "mistral-small-2603": TokenPricing(0.15, 0.60, cached_input_usd_per_million=0.015),
     DEFAULT_REVIEW_MODEL: _LARGE_4_PRICING,
     "mistral-large-4": _LARGE_4_PRICING,
 }
@@ -113,6 +116,12 @@ class MistralClient:
         self.max_tokens = max_tokens
         self.timeout_seconds = timeout_seconds
         self.reasoning_effort = reasoning_effort
+        self._prompt_cache_key: str | None = None
+
+    def for_run(self, run_id: str) -> Self:
+        client = copy(self)
+        client._prompt_cache_key = f"sql-report-{run_id}"
+        return client
 
     def chat(self, messages: Sequence[Message], tools: Sequence[ToolSpec]) -> ChatResponse:
         payload: dict[str, object] = {
@@ -123,6 +132,8 @@ class MistralClient:
         }
         if tools:
             payload["tools"] = [tool.to_payload() for tool in tools]
+        if self._prompt_cache_key is not None:
+            payload["prompt_cache_key"] = self._prompt_cache_key
         if self.reasoning_effort is not None:
             payload["reasoning_effort"] = self.reasoning_effort
         request = Request(

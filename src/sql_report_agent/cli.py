@@ -3,16 +3,86 @@
 import argparse
 import sys
 from collections.abc import Sequence
+from functools import partial
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from time import perf_counter
 
-from sql_report_agent.agent.loop import AnalysisAgent
-from sql_report_agent.llm.base import LLMError
+from sql_report_agent.agent.loop import AnalysisAgent, ReviseReport
+from sql_report_agent.llm.base import LLMError, RunScopedClient
 from sql_report_agent.llm.mistral import DEFAULT_MODEL, DEFAULT_REVIEW_MODEL, MistralClient
+from sql_report_agent.llm.openai import SOL_MODEL, OpenAIClient
 from sql_report_agent.render.pdf import PdfError, PdfRenderer
 from sql_report_agent.render.review import review_pdf
+from sql_report_agent.tools.report import PreparedReport
 from sql_report_agent.tools.sql import SqlTools
 from sql_report_agent.tracing import append_event, replay_run
+
+
+def _review_and_revise(
+    initial: PreparedReport,
+    trace: Path,
+    revise: ReviseReport,
+    *,
+    renderer: PdfRenderer,
+    output: Path,
+    judge: RunScopedClient,
+    model: str,
+    question: str,
+    started_at: float,
+    data_reviewed: bool = False,
+) -> PreparedReport:
+    visual_judge = judge.for_run(f"{trace.parent.name}-judge")
+    if data_reviewed:
+        print("Synthèse vérifiée par le juge des données.")
+    renderer.write(initial, output)
+    append_event(
+        trace,
+        "pdf_written",
+        filename=output.name,
+        delivery_duration_ms=(perf_counter() - started_at) * 1_000,
+    )
+    review = review_pdf(output, trace, question, visual_judge, model)
+    if review is None:
+        print("Relecture visuelle incomplète. Consulte la trace.", file=sys.stderr)
+        return initial
+    if not review.corrections:
+        print("Avis du juge visuel enregistré dans la trace.")
+        return initial
+
+    feedback = "Observations du juge visuel sur le PDF initial :\n" + "\n".join(review.corrections)
+    candidate = revise(feedback)
+    reason = "Construct n’a pas fourni de révision valide conservant les données du rapport."
+    if candidate is not None:
+        try:
+            with TemporaryDirectory(prefix=".revision-", dir=output.parent) as directory:
+                draft = Path(directory) / output.name
+                renderer.write(candidate, draft)
+                check = review_pdf(draft, trace, question, visual_judge, model, revision=True)
+                if check is not None and check.approved:
+                    draft.replace(output)
+                else:
+                    candidate = None
+                    reason = "Le juge n’a pas validé toutes les pages du PDF révisé."
+        except (OSError, PdfError, ValueError) as error:
+            candidate = None
+            reason = f"Impossible de publier la révision du PDF. {error}"
+
+    if candidate is None:
+        append_event(trace, "pdf_revision", accepted=False, reason=reason)
+        print(f"PDF initial conservé. {reason}", file=sys.stderr)
+        return initial
+
+    append_event(
+        trace,
+        "pdf_written",
+        filename=output.name,
+        revision=True,
+        delivery_duration_ms=(perf_counter() - started_at) * 1_000,
+    )
+    append_event(trace, "pdf_revision", accepted=True)
+    print("PDF révisé après validation du juge visuel.")
+    return candidate
 
 
 def report(argv: Sequence[str] | None = None) -> None:
@@ -22,15 +92,20 @@ def report(argv: Sequence[str] | None = None) -> None:
     parser.add_argument("--model", default=DEFAULT_MODEL)
     parser.add_argument("--db", type=Path, default=Path("data/olist.db"))
     parser.add_argument("--runs-dir", type=Path, default=Path("runs"))
-    parser.add_argument("--max-steps", type=int, default=12)
+    parser.add_argument(
+        "--max-steps", type=int, default=12, help="Nombre maximal de tours avant relecture."
+    )
     parser.add_argument("--max-output-tokens", type=int, default=3_000)
     parser.add_argument(
-        "--review-pdf", action="store_true", help="Envoyer les pages rendues à un juge visuel."
+        "--review-data", action="store_true", help="Vérifier la synthèse dans SQLite avant le PDF."
+    )
+    parser.add_argument(
+        "--review-pdf", action="store_true", help="Relire le PDF et tenter une correction visuelle."
     )
     parser.add_argument(
         "--review-model",
         default=DEFAULT_REVIEW_MODEL,
-        help=f"Modèle multimodal du juge (par défaut : {DEFAULT_REVIEW_MODEL}).",
+        help=f"Modèle des juges (par défaut : {DEFAULT_REVIEW_MODEL}).",
     )
     args = parser.parse_args(argv)
     if not args.question.strip():
@@ -42,16 +117,24 @@ def report(argv: Sequence[str] | None = None) -> None:
     started_at = perf_counter()
     try:
         renderer = PdfRenderer()
-        client = MistralClient(args.model, max_tokens=args.max_output_tokens)
-        judge = None
-        if args.review_pdf:
+        client = (
+            OpenAIClient(max_tokens=args.max_output_tokens)
+            if args.model == SOL_MODEL
+            else MistralClient(args.model, max_tokens=args.max_output_tokens)
+        )
+        judge: RunScopedClient | None = None
+        if args.review_pdf or args.review_data:
             review_model = args.review_model
             large_4 = review_model in {DEFAULT_REVIEW_MODEL, "mistral-large-4"}
-            judge = MistralClient(
-                review_model,
-                max_tokens=3_200 if large_4 else 1_800,
-                timeout_seconds=120 if large_4 else 45,
-                reasoning_effort="low" if large_4 else None,
+            judge = (
+                OpenAIClient(max_tokens=3_200)
+                if review_model == SOL_MODEL
+                else MistralClient(
+                    review_model,
+                    max_tokens=3_200 if large_4 else 1_800,
+                    timeout_seconds=120 if large_4 else 45,
+                    reasoning_effort="low" if large_4 else None,
+                )
             )
         agent = AnalysisAgent(
             client,
@@ -59,26 +142,37 @@ def report(argv: Sequence[str] | None = None) -> None:
             max_steps=args.max_steps,
             runs_dir=args.runs_dir,
         )
-        result = agent.run_report(args.question)
+        finalize = None
+        if args.review_pdf and judge is not None:
+            finalize = partial(
+                _review_and_revise,
+                renderer=renderer,
+                output=args.out,
+                judge=judge,
+                model=args.review_model,
+                question=args.question,
+                started_at=started_at,
+                data_reviewed=args.review_data,
+            )
+
+        result = agent.run_report(
+            args.question, finalize=finalize, data_judge=judge if args.review_data else None
+        )
         if result.report is None:
             parser.exit(1, f"{result.error} Trace : {result.run_id}\n")
-        renderer.write(result.report, args.out)
-        append_event(
-            result.trace_path,
-            "pdf_written",
-            filename=args.out.name,
-            delivery_duration_ms=(perf_counter() - started_at) * 1_000,
-        )
+        if finalize is None:
+            if args.review_data:
+                print("Synthèse vérifiée par le juge des données.")
+            renderer.write(result.report, args.out)
+            append_event(
+                result.trace_path,
+                "pdf_written",
+                filename=args.out.name,
+                delivery_duration_ms=(perf_counter() - started_at) * 1_000,
+            )
     except (LLMError, OSError, PdfError, ValueError) as error:
         parser.exit(1, f"Rapport impossible : {error}\n")
     print(f"PDF créé : {args.out.resolve()}\nTrace : {result.run_id}")
-    if judge is not None:
-        if review_pdf(args.out, result.trace_path, args.question, judge, args.review_model):
-            print("Avis du juge visuel enregistré dans la trace.")
-        else:
-            print("Relecture visuelle incomplète. Consulte la trace.", file=sys.stderr)
-    if unsupported := result.report.audit.unsupported:
-        print(f"Chiffres à vérifier dans le rapport : {len(unsupported)}.", file=sys.stderr)
 
 
 def replay(argv: Sequence[str] | None = None) -> None:

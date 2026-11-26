@@ -145,13 +145,30 @@ def replay_run(root: Path, run_id: str, *, verbose: bool = False) -> Iterator[st
                 case "run_aborted":
                     yield f"Trace interrompue  {record['error_type']}"
                 case "pdf_written":
-                    yield f"PDF créé  {record['filename']}"
+                    label = "PDF révisé" if record.get("revision") else "PDF créé"
+                    yield f"{label}  {record['filename']}"
+                case "data_review":
+                    yield (
+                        f"Juge des données  {record.get('model') or '?'} "
+                        f"· {record.get('verdict') or 'contrôle SQL'} "
+                        f"· coût {_cost_label(record.get('estimated_cost_usd'))}"
+                    )
+                    if feedback := record.get("feedback"):
+                        yield f"  {_preview(feedback, verbose=verbose)}"
+                    if verbose and record.get("checks"):
+                        yield f"  Contrôles  {_display(record['checks'])}"
+                case "pdf_revision":
+                    if record["accepted"]:
+                        yield "Révision acceptée"
+                    else:
+                        yield f"PDF initial conservé  {record['reason']}"
                 case "pdf_review":
                     pages = ", ".join(str(page["number"]) for page in record["pages"])
                     model = record.get("model") or "inconnu"
                     target = record.get("target_page")
                     scope = f"page cible {target} · " if target is not None else ""
-                    yield f"Juge visuel  {model} · {scope}pages {pages or '?'}"
+                    version = "PDF révisé · " if record.get("revision") else ""
+                    yield f"Juge visuel  {model} · {version}{scope}pages {pages or '?'}"
                     detail = record.get("error") or record.get("review")
                     if detail:
                         yield f"  {_preview(detail, verbose=verbose)}"

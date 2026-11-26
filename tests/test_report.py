@@ -1,4 +1,5 @@
 import json
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -9,8 +10,8 @@ from sql_report_agent.llm.base import ChatResponse, Message, ToolCall
 from sql_report_agent.render.pdf import PdfRenderer
 from sql_report_agent.store import ResultStore
 from sql_report_agent.tools.charts import CHART_TYPES, ChartError, ChartStore
-from sql_report_agent.tools.report import ReportError, prepare_report
-from sql_report_agent.tools.sql import SqlResult
+from sql_report_agent.tools.report import NumberCheck, ReportError, prepare_report
+from sql_report_agent.tools.sql import SqlResult, SqlTools
 
 
 @pytest.fixture
@@ -33,11 +34,8 @@ def test_substitution_and_number_audit(report_data: tuple[ResultStore, ChartStor
             "summary": "{{r1.total[0]}} commandes, soit un taux de {{r1.taux[0]}} %.",
             "sections": [
                 {
-                    "heading": "Taux de 12,5 %",
-                    "text": (
-                        "Volume de 3\u202f500 commandes. Un autre chiffre est 37. "
-                        "Le taux manquant est {{r1.taux[1]}}."
-                    ),
+                    "heading": "Taux de {{r1.taux[0]}} %",
+                    "text": "Le taux manquant est {{r1.taux[1]}}.",
                     "table_result_id": "r1",
                 },
                 {
@@ -52,15 +50,45 @@ def test_substitution_and_number_audit(report_data: tuple[ResultStore, ChartStor
     assert report.summary == "3500 commandes, soit un taux de 12.5 %."
     assert report.sections[0].text.endswith("Le taux manquant est non renseigné.")
     assert report.sections[0].table is report_data[0].get("r1")
-    assert report.audit.numeric_references == 3
-    assert [(item.literal, item.supported) for item in report.audit.literals] == [
-        ("12,5", True),
-        ("3\u202f500", True),
-        ("37", False),
-    ]
-    assert [(item.field, item.literal) for item in report.audit.unsupported] == [
-        ("Section 1, texte", "37")
-    ]
+    assert report.audit.numeric_references == 4
+    assert report.audit.literals == ()
+
+
+def test_rejects_literal_numbers_in_all_report_fields(
+    report_data: tuple[ResultStore, ChartStore],
+) -> None:
+    with pytest.raises(ReportError) as failure:
+        prepare_report(
+            {
+                "title": "Analyse 2017",
+                "summary": "Volume de 3\u202f500 commandes.",
+                "sections": [{"heading": "Taux de 12,5 %", "text": "Écart de 37jours."}],
+            },
+            *report_data,
+        )
+    detail = str(failure.value)
+    assert "{{r1.total[0]}}" in detail and "run_sql" in detail and "write_report" in detail
+    assert "Titre — « 2017 »" in detail
+    assert "Synthèse — « 3\u202f500 »" in detail
+    assert "Section 1, titre — « 12,5 »" in detail
+    assert "Section 1, texte — « 37 »" in detail
+
+
+def test_reference_uses_the_exact_sql_column_name(
+    report_data: tuple[ResultStore, ChartStore],
+) -> None:
+    values, _ = report_data
+    result_id = values.add(SqlResult(("Retard [jours]",), ("real",), ((10.5,),)))
+    draft = {
+        "title": "Analyse",
+        "summary": f"Le retard moyen est de {{{{{result_id}.retard_jours[0]}}}}.",
+        "sections": [{"heading": "Détail", "text": "Commandes en retard."}],
+    }
+    with pytest.raises(ReportError, match=r"« Retard \[jours\] »"):
+        prepare_report(draft, *report_data)
+
+    draft["summary"] = f"Le retard moyen est de {{{{{result_id}.Retard [jours][0]}}}}."
+    assert prepare_report(draft, *report_data).summary == "Le retard moyen est de 10.5."
 
 
 @pytest.mark.parametrize(
@@ -132,7 +160,7 @@ def test_pdf_embeds_chart_displays_prose_as_text_and_marks_warnings(
     report = prepare_report(
         {
             "title": "Comparaison <données>",
-            "summary": "Total de {{r1.total[0]}}. Écart annoncé de 999.",
+            "summary": "Total de {{r1.total[0]}}.",
             "sections": [
                 {
                     "heading": "Détail",
@@ -143,6 +171,9 @@ def test_pdf_embeds_chart_displays_prose_as_text_and_marks_warnings(
             ],
         },
         *report_data,
+    )
+    report = replace(
+        report, audit=replace(report.audit, literals=(NumberCheck("Synthèse", "999", False),))
     )
     output = PdfRenderer().write(report, tmp_path / "comparaison.pdf")
     pdf = PdfReader(output)
@@ -208,7 +239,17 @@ def test_agent_retries_invalid_report_and_stops_on_valid_tool_call(tmp_path: Pat
                 content = messages[-1].content
                 assert content is not None
                 assert "introuvable" in json.loads(content)["error"]
-            summary = "Total de {{r9.total[0]}}." if self.calls == 2 else "Total de 99."
+            if self.calls == 4:
+                content = messages[-1].content
+                assert content is not None
+                assert "Synthèse — « 99 »" in json.loads(content)["error"]
+                call = ToolCall("requestsql", "run_sql", '{"query":"SELECT 42 AS total"}')
+                return ChatResponse(Message("assistant", tool_calls=(call,)))
+            summary = {
+                2: "Total de {{r9.total[0]}}.",
+                3: "Total de 99.",
+                5: "Total de {{r1.total[0]}}.",
+            }[self.calls]
             args = {
                 "report": {
                     "title": "Résultats",
@@ -222,13 +263,15 @@ def test_agent_retries_invalid_report_and_stops_on_valid_tool_call(tmp_path: Pat
             return ChatResponse(Message("assistant", tool_calls=(call,)))
 
     client = ReportClient()
-    result = AnalysisAgent(client, runs_dir=tmp_path).run_report("Analyse.")
+    database = tmp_path / "test.db"
+    database.touch()
+    result = AnalysisAgent(client, sql=SqlTools(database), runs_dir=tmp_path).run_report("Analyse.")
     assert result.status == "completed" and result.report is not None
-    assert result.report.audit.unsupported[0].literal == "99"
-    assert result.steps == client.calls == 3
-    assert result.tool_calls == 2
+    assert result.report.summary == "Total de 42."
+    assert result.steps == client.calls == 5
+    assert result.tool_calls == 4
     events = [
         json.loads(line) for line in result.trace_path.read_text(encoding="utf-8").splitlines()
     ]
     audit = events[-1]["number_audit"]
-    assert audit["literals"] == [{"field": "Synthèse", "literal": "99", "supported": False}]
+    assert audit == {"numeric_references": 1, "literals": []}
