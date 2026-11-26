@@ -96,12 +96,6 @@ def _elapsed_ms(started_at: float) -> float:
     return (perf_counter() - started_at) * 1_000
 
 
-def _usage_details(usage: TokenUsage | None) -> dict[str, int] | None:
-    if usage is None:
-        return None
-    return {**asdict(usage), "total_tokens": usage.total_tokens}
-
-
 def _request_trace_fields(
     payload: dict[str, object] | None, messages: Sequence[Message], specs: Sequence[ToolSpec]
 ) -> dict[str, object]:
@@ -232,9 +226,13 @@ class AnalysisAgent:
                 error += " Aucun rapport valide n'a été remis dans le dernier appel."
         usage = None
         if steps == len(usages):
+            cached_tokens = [call.cached_prompt_tokens for call in usages]
             usage = TokenUsage(
                 sum(call.prompt_tokens for call in usages),
                 sum(call.completion_tokens for call in usages),
+                sum(count for count in cached_tokens if count is not None)
+                if None not in cached_tokens
+                else None,
             )
         duration_ms = _elapsed_ms(started_at)
         cost = sum(costs, start=0.0) if len(costs) == steps else None
@@ -245,7 +243,7 @@ class AnalysisAgent:
             error=error,
             steps=steps,
             tool_calls=tool_calls,
-            usage=_usage_details(usage),
+            usage=usage.to_payload() if usage is not None else None,
             estimated_cost_usd=cost,
             duration_ms=duration_ms,
             number_audit=asdict(report.audit) if report is not None else None,
@@ -297,7 +295,7 @@ class AnalysisAgent:
             model=response.model,
             finish_reason=response.finish_reason,
             response=response.message.to_payload(),
-            usage=_usage_details(response.usage),
+            usage=response.usage.to_payload() if response.usage is not None else None,
             pricing=asdict(pricing) if pricing else None,
             estimated_cost_usd=cost,
             duration_ms=duration_ms,

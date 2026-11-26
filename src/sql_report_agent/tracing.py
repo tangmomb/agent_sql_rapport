@@ -3,11 +3,61 @@
 import json
 import re
 from collections.abc import Iterator
+from contextlib import suppress
 from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
 
 TRACE_NAME = "trace.jsonl"
+STUDIO_INDEX_NAME = "studio-index.js"
+
+
+def _write_script(path: Path, content: str) -> None:
+    temporary = path.with_name(f".{path.name}.{uuid4().hex}.tmp")
+    try:
+        temporary.write_text(content, encoding="utf-8")
+        temporary.replace(path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def refresh_studio_catalog(root: Path) -> None:
+    """Préparer les traces à relire depuis la page locale du Studio."""
+    entries = []
+    for source in root.rglob("*.jsonl"):
+        if source.is_symlink():
+            continue
+        script = source.with_suffix(".jsonl.js")
+        try:
+            stat = source.stat()
+            with source.open(encoding="utf-8-sig") as stream:
+                first = json.loads(stream.readline())
+                if not isinstance(first, dict) or not isinstance(first.get("event"), str):
+                    continue
+                if not script.exists() or script.stat().st_mtime_ns < stat.st_mtime_ns:
+                    records = [first, *(json.loads(line) for line in stream if line.strip())]
+                    payload = json.dumps(records, ensure_ascii=True, allow_nan=False)
+                    _write_script(script, f"document.currentScript.traceEvents = {payload};\n")
+            entries.append(
+                {
+                    "path": source.relative_to(root).as_posix(),
+                    "question": first.get("question"),
+                    "updated_ms": stat.st_mtime_ns // 1_000_000,
+                }
+            )
+        except (OSError, ValueError):
+            continue
+    entries.sort(key=lambda entry: (-entry["updated_ms"], entry["path"]))
+    payload = json.dumps(entries, ensure_ascii=True)
+    _write_script(root / STUDIO_INDEX_NAME, f"globalThis.OLIST_TRACE_INDEX = {payload};\n")
+
+
+def _refresh_local_studio(path: Path) -> None:
+    for root in path.resolve().parents:
+        if root.name == "runs" and (root.parent / "studio" / "index.html").is_file():
+            with suppress(OSError):
+                refresh_studio_catalog(root)
+            return
 
 
 def append_event(path: Path, event: str, **fields: object) -> None:
@@ -18,6 +68,8 @@ def append_event(path: Path, event: str, **fields: object) -> None:
     }
     with path.open("a", encoding="utf-8", newline="\n") as trace:
         trace.write(json.dumps(record, allow_nan=False) + "\n")
+    if event in {"run_end", "run_aborted", "pdf_written", "pdf_review"}:
+        _refresh_local_studio(path)
 
 
 class RunTrace:
@@ -97,7 +149,9 @@ def replay_run(root: Path, run_id: str, *, verbose: bool = False) -> Iterator[st
                 case "pdf_review":
                     pages = ", ".join(str(page["number"]) for page in record["pages"])
                     model = record.get("model") or "inconnu"
-                    yield f"Juge visuel  {model} · pages {pages or '?'}"
+                    target = record.get("target_page")
+                    scope = f"page cible {target} · " if target is not None else ""
+                    yield f"Juge visuel  {model} · {scope}pages {pages or '?'}"
                     detail = record.get("error") or record.get("review")
                     if detail:
                         yield f"  {_preview(detail, verbose=verbose)}"

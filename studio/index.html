@@ -4,9 +4,10 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="description" content="Explore le pipeline de l’agent SQL et ses traces d’exécution.">
-  <title>Olist · Studio de l’agent SQL</title>
+  <title>Studio de l’agent SQL</title>
   <link rel="stylesheet" href="style.css">
   <script src="demo.js" defer></script>
+  <script src="../runs/studio-index.js" defer></script>
   <script src="syntax.js" defer></script>
   <script src="studio.js" defer></script>
 </head>
@@ -14,12 +15,17 @@
   <header class="topbar">
     <a class="brand" href="index.html" aria-label="Studio de l’agent SQL">
       <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>
-      <span>Olist <small>Studio</small></span>
+      <span>Studio</span>
     </a>
     <div class="top-actions">
-      <button class="quiet-button" id="demo-button" type="button">Exemple Olist</button>
-      <label class="button import-button" for="trace-file"><span aria-hidden="true">＋</span> Importer une trace</label>
-      <input id="trace-file" class="visually-hidden" type="file" accept=".jsonl,.ndjson,.json,text/plain">
+      <select id="trace-picker" class="button trace-picker" aria-label="Charger une trace">
+        <option value="default">Trace par défaut</option>
+        <optgroup id="trace-options" label="Traces disponibles" hidden></optgroup>
+        <optgroup label="Autre source">
+          <option value="file">Importer un fichier…</option>
+        </optgroup>
+      </select>
+      <input id="trace-file" type="file" accept=".jsonl,.ndjson,.json,text/plain" hidden>
     </div>
   </header>
 
@@ -27,13 +33,17 @@
     <section class="run-header" aria-labelledby="title">
       <div class="run-headline">
         <div>
-          <h1 id="title">Pipeline de l’agent SQL</h1>
-          <p id="question" class="question"></p>
+          <h1 id="title">Pipeline de la demande de rapport</h1>
+          <p class="question">demande utilisateur : <span id="question"></span></p>
         </div>
         <p id="run-status" class="status"></p>
       </div>
-      <p class="trace-summary">Chaque exécution crée un fichier <code>runs/&lt;id&gt;/trace.jsonl</code> avec un objet JSON par événement. La trace contient la question, les appels au LLM et aux outils, leurs réponses et le bilan de l’exécution. C'est ceci que nous explorons ci-dessous.</p>
-      <div class="metrics" id="metrics" aria-label="Mesures de l’exécution"></div>
+      <p class="trace-summary">Chaque exécution crée un fichier <code>runs/&lt;id&gt;/trace.jsonl</code> avec un objet JSON par événement. La trace contient la question, les appels au LLM et aux outils, leurs réponses et le bilan de l’exécution.<br>
+        C'est ceci que nous explorons ci-dessous.</p>
+      <div class="metric-row">
+        <div class="execution-metrics" id="metrics" role="group" aria-label="Mesures de l’exécution"></div>
+        <div class="model-metrics" id="model-metrics" role="group" aria-label="Consommation et coût par modèle" title="Un tiret indique une mesure indisponible."></div>
+      </div>
       <p class="error-banner" id="import-error" role="alert" hidden></p>
     </section>
 
@@ -81,11 +91,10 @@
         <div class="filters tabs" id="tabs" aria-label="Vue de l’inspecteur">
           <button type="button" data-tab="overview" aria-pressed="true">Aperçu</button>
           <button type="button" data-tab="launch" data-stage="question" aria-pressed="false" hidden>Lancement</button>
-          <button type="button" data-tab="prompt" data-stage="model" aria-pressed="false" hidden>Prompt</button>
+          <button type="button" data-tab="prompt" data-stage="llm" aria-pressed="false" hidden>Prompt</button>
           <button type="button" data-tab="reportlab" data-stage="pdf" aria-pressed="false" hidden>Comment fonctionne reportlab ?</button>
-          <button type="button" data-tab="pdf-pages" data-stage="pdf_review" aria-pressed="false" hidden>Pages du PDF</button>
           <button type="button" data-tab="tool-schema" data-stage="tool" aria-pressed="false" hidden>Schéma JSON</button>
-          <button type="button" data-tab="tool-example" data-stage="tool" aria-pressed="false" hidden>Exemple JSON</button>
+          <button type="button" data-tab="turn" data-stage="turn" aria-pressed="false" hidden>À ce tour précis</button>
           <button type="button" data-tab="json" aria-pressed="false">JSON</button>
         </div>
         <div id="inspector" class="inspector"></div>

@@ -21,7 +21,13 @@ from sql_report_agent.llm.base import (
 
 MISTRAL_ENDPOINT = "https://api.mistral.ai/v1/chat/completions"
 DEFAULT_MODEL = "mistral-small-2603"
-STANDARD_PRICING = {DEFAULT_MODEL: TokenPricing(0.15, 0.60)}
+DEFAULT_REVIEW_MODEL = "mistral-large-4-0"
+_LARGE_4_PRICING = TokenPricing(0.70, 2.10, cached_input_usd_per_million=0.07)
+STANDARD_PRICING = {
+    DEFAULT_MODEL: TokenPricing(0.15, 0.60, cached_input_usd_per_million=0.015),
+    DEFAULT_REVIEW_MODEL: _LARGE_4_PRICING,
+    "mistral-large-4": _LARGE_4_PRICING,
+}
 
 
 def _response_content(value: object) -> str | None:
@@ -56,16 +62,20 @@ def _parse_response(raw: bytes) -> ChatResponse:
             calls.append(ToolCall(call_id, name, arguments))
 
         usage = None
-        if payload.get("usage") is not None:
-            prompt = payload["usage"]["prompt_tokens"]
-            completion = payload["usage"]["completion_tokens"]
+        if (usage_fields := payload.get("usage")) is not None:
+            prompt = usage_fields["prompt_tokens"]
+            completion = usage_fields["completion_tokens"]
+            details = usage_fields.get("prompt_tokens_details") or {}
+            cached = details.get("cached_tokens", 0)
             if (
                 type(prompt) is not int
                 or type(completion) is not int
+                or type(cached) is not int
                 or min(prompt, completion) < 0
+                or not 0 <= cached <= prompt
             ):
                 raise ValueError("compteurs de tokens invalides")
-            usage = TokenUsage(prompt, completion)
+            usage = TokenUsage(prompt, completion, cached)
         model = payload.get("model")
         finish_reason = choice.get("finish_reason")
         if (model is not None and not isinstance(model, str)) or (
@@ -89,6 +99,7 @@ class MistralClient:
         *,
         max_tokens: int = 1024,
         timeout_seconds: float = 45.0,
+        reasoning_effort: str | None = None,
     ) -> None:
         api_key = os.environ.get("MISTRAL_API_KEY", "").strip()
         if not api_key:
@@ -101,6 +112,7 @@ class MistralClient:
         self.model = model
         self.max_tokens = max_tokens
         self.timeout_seconds = timeout_seconds
+        self.reasoning_effort = reasoning_effort
 
     def chat(self, messages: Sequence[Message], tools: Sequence[ToolSpec]) -> ChatResponse:
         payload: dict[str, object] = {
@@ -111,6 +123,8 @@ class MistralClient:
         }
         if tools:
             payload["tools"] = [tool.to_payload() for tool in tools]
+        if self.reasoning_effort is not None:
+            payload["reasoning_effort"] = self.reasoning_effort
         request = Request(
             MISTRAL_ENDPOINT,
             data=json.dumps(payload).encode("utf-8"),

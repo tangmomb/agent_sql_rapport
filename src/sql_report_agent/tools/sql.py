@@ -7,7 +7,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from time import monotonic
-from typing import TypedDict
+from typing import NotRequired, TypedDict
 
 from sqlglot import exp, parse, tokenize
 from sqlglot.errors import SqlglotError
@@ -50,7 +50,8 @@ class TableDescription(TypedDict):
     kind: str
     columns: list[ColumnInfo]
     foreign_keys: list[ForeignKey]
-    sample_rows: list[list[SqlValue]]
+    sample_columns: NotRequired[list[str]]
+    sample_rows: NotRequired[list[list[SqlValue]]]
 
 
 def preview_row(row: SqlRow) -> list[SqlValue]:
@@ -195,8 +196,10 @@ class SqlTools:
                 )
             ]
 
-    def describe_table(self, table: str) -> TableDescription:
-        """Décrire un nom exact, avec trois lignes d'exemple au maximum."""
+    def describe_table(
+        self, table: str, *, sample_columns: tuple[str, ...] = ()
+    ) -> TableDescription:
+        """Décrire la table et échantillonner seulement les colonnes demandées."""
         with self._connect() as db:
             entry = db.execute(
                 "SELECT type FROM sqlite_schema WHERE name = ? "
@@ -217,6 +220,28 @@ class SqlTools:
                     f"PRAGMA table_info({identifier})"
                 )
             ]
+            foreign_keys = [
+                ForeignKey(column=column, referenced_table=parent, referenced_column=target)
+                for _, _, parent, column, target, *_ in db.execute(
+                    f"PRAGMA foreign_key_list({identifier})"
+                )
+            ]
+            description = TableDescription(
+                name=table,
+                kind=entry[0],
+                columns=columns,
+                foreign_keys=foreign_keys,
+            )
+            if not sample_columns:
+                return description
+
+            column_names = {column["name"] for column in columns}
+            for column in sample_columns:
+                if column not in column_names:
+                    raise SqlToolError(f"Colonne d'exemple inconnue : {column!r}.")
+            if len(set(sample_columns)) != len(sample_columns):
+                raise SqlToolError("Les colonnes d'exemple doivent être distinctes.")
+
             primary_key = sorted(
                 (column for column in columns if column["primary_key_position"]),
                 key=lambda column: column["primary_key_position"] or 0,
@@ -226,21 +251,14 @@ class SqlTools:
                 order_by = " ORDER BY " + ", ".join(
                     quote_identifier(column["name"]) for column in primary_key
                 )
-            foreign_keys = [
-                ForeignKey(column=column, referenced_table=parent, referenced_column=target)
-                for _, _, parent, column, target, *_ in db.execute(
-                    f"PRAGMA foreign_key_list({identifier})"
-                )
-            ]
+            selection = ", ".join(quote_identifier(column) for column in sample_columns)
             db.set_authorizer(authorize_read)
-            samples = db.execute(f"SELECT * FROM {identifier}{order_by} LIMIT 3")
-            return TableDescription(
-                name=table,
-                kind=entry[0],
-                columns=columns,
-                foreign_keys=foreign_keys,
-                sample_rows=[preview_row(tuple(map(checked_value, row))) for row in samples],
-            )
+            samples = db.execute(f"SELECT {selection} FROM {identifier}{order_by} LIMIT 3")
+            description["sample_columns"] = list(sample_columns)
+            description["sample_rows"] = [
+                preview_row(tuple(map(checked_value, row))) for row in samples
+            ]
+            return description
 
     def run_sql(self, query: str) -> SqlResult:
         """Retourner le résultat complet si la requête respecte les limites."""

@@ -49,6 +49,8 @@ def review_pdf(
     started = perf_counter()
     pages = []
     total_pages = None
+    turn: dict[str, object] = {}
+    actual_model = model
     try:
         with pdfium.PdfDocument(pdf_path) as pdf:
             total_pages = len(pdf)
@@ -56,45 +58,60 @@ def review_pdf(
                 raise ValueError("Le PDF ne contient aucune page.")
             for start in range(0, total_pages, PAGES_PER_REQUEST):
                 started = perf_counter()
-                pages = [
-                    {"number": index + 1, "image": _page_image(pdf, index)}
-                    for index in range(start, min(start + PAGES_PER_REQUEST, total_pages))
-                ]
+                turn = {}
+                actual_model = model
+                indices = range(start, min(start + PAGES_PER_REQUEST, total_pages))
+                images = tuple(_page_image(pdf, index) for index in indices)
+                pages = [{"number": index + 1} for index in indices]
                 numbers = ", ".join(str(page["number"]) for page in pages)
-                response = client.chat(
-                    [
-                        Message("system", SYSTEM_PROMPT),
-                        Message(
-                            "user",
-                            f"Pages jointes dans l’ordre : {numbers} sur {total_pages} au total.\n"
-                            f"Question initiale : {question}",
-                            image_urls=tuple(page["image"] for page in pages),
-                        ),
-                    ],
-                    (),
+                messages = (
+                    Message("system", SYSTEM_PROMPT),
+                    Message(
+                        "user",
+                        f"Pages jointes dans l’ordre : {numbers} sur {total_pages} au total.\n"
+                        f"Question initiale : {question}",
+                        image_urls=images,
+                    ),
                 )
+                turn["messages"] = [message.to_payload() for message in messages]
+                response = client.chat(messages, ())
+                if response.request_payload is not None:
+                    del turn["messages"]
+                    turn["request"] = response.request_payload
+                turn["response"] = response.message.to_payload()
+                turn["finish_reason"] = response.finish_reason
+                actual_model = response.model or model
+                if (usage := response.usage) is not None:
+                    turn["usage"] = usage.to_payload()
+                    if response.pricing is not None:
+                        turn["estimated_cost_usd"] = response.pricing.estimate_usd(usage)
                 review = (response.message.content or "").strip()
                 if not review or response.finish_reason == "length":
                     raise LLMError("Le juge a renvoyé un avis vide ou tronqué.")
                 append_event(
                     trace_path,
                     "pdf_review",
-                    model=response.model or model,
+                    model=actual_model,
                     pages=pages,
                     total_pages=total_pages,
                     review=review,
                     duration_ms=(perf_counter() - started) * 1_000,
+                    **turn,
                 )
                 pages = []
     except (LLMError, OSError, ValueError, pdfium.PdfiumError) as error:
+        if isinstance(error, LLMError) and error.request_payload is not None:
+            turn.pop("messages", None)
+            turn["request"] = error.request_payload
         append_event(
             trace_path,
             "pdf_review",
-            model=model,
+            model=actual_model,
             pages=pages,
             total_pages=total_pages,
             error=str(error),
             duration_ms=(perf_counter() - started) * 1_000,
+            **turn,
         )
         return False
     return True

@@ -12,7 +12,16 @@ from sql_report_agent.llm.base import LLMError, Message, TokenUsage, ToolCall, T
 from sql_report_agent.tracing import replay_run
 
 
-def test_mistral_round_trip(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize(
+    ("cache_details", "cached_tokens", "cost"),
+    [({}, 0, 0.000174), ({"prompt_tokens_details": {"cached_tokens": 512}}, 512, 0.00010488)],
+)
+def test_mistral_round_trip(
+    monkeypatch: pytest.MonkeyPatch,
+    cache_details: dict[str, object],
+    cached_tokens: int,
+    cost: float,
+) -> None:
     monkeypatch.setenv("MISTRAL_API_KEY", "test-key")
     call = ToolCall("abc123456", "list_tables", "{}")
     messages = (
@@ -41,7 +50,12 @@ def test_mistral_round_trip(monkeypatch: pytest.MonkeyPatch) -> None:
                 "finish_reason": "tool_calls",
             }
         ],
-        "usage": {"prompt_tokens": 800, "completion_tokens": 90, "total_tokens": 890},
+        "usage": {
+            "prompt_tokens": 800,
+            "completion_tokens": 90,
+            "total_tokens": 890,
+            **cache_details,
+        },
     }
 
     def send(request: Request, *, timeout: float) -> io.BytesIO:
@@ -64,10 +78,10 @@ def test_mistral_round_trip(monkeypatch: pytest.MonkeyPatch) -> None:
     assert result.message.tool_calls == (
         ToolCall("def123456", "describe_table", '{"table":"orders"}'),
     )
-    assert result.usage == TokenUsage(800, 90)
+    assert result.usage == TokenUsage(800, 90, cached_tokens)
     assert result.finish_reason == "tool_calls"
     assert result.pricing is not None
-    assert result.pricing.estimate_usd(result.usage) == pytest.approx(0.000174)
+    assert result.pricing.estimate_usd(result.usage) == pytest.approx(cost)
 
 
 def test_mistral_reads_text_chunks(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -46,7 +46,14 @@ def test_schema_and_samples(sql: SqlTools) -> None:
     assert table["foreign_keys"] == [
         {"column": "customer", "referenced_table": "customers", "referenced_column": "id"}
     ]
-    assert [row[0] for row in table["sample_rows"]] == [1, 2, 3]
+    assert "sample_rows" not in table
+    sample = sql.describe_table("orders", sample_columns=("comment", "id"))
+    assert sample["sample_columns"] == ["comment", "id"]
+    assert sample["sample_rows"] == [["é" * 200 + "…", i] for i in range(1, 4)]
+    with pytest.raises(SqlToolError, match="Colonne d'exemple inconnue"):
+        sql.describe_table("orders", sample_columns=("missing",))
+    with pytest.raises(SqlToolError, match="distinctes"):
+        sql.describe_table("orders", sample_columns=("id", "id"))
     assert sql.describe_table("rated_orders")["kind"] == "view"
     with pytest.raises(SqlToolError, match="inconnue"):
         sql.describe_table("missing")

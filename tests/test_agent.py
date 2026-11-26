@@ -37,10 +37,10 @@ def tool_call(call_id: str, name: str, **arguments: object) -> ToolCall:
     return ToolCall(call_id, name, json.dumps(arguments))
 
 
-def requested(*calls: ToolCall) -> ChatResponse:
+def requested(*calls: ToolCall, cached_tokens: int | None = None) -> ChatResponse:
     return ChatResponse(
         Message("assistant", tool_calls=calls),
-        TokenUsage(100, 10),
+        TokenUsage(100, 10, cached_tokens),
         model="scripted",
         finish_reason="tool_calls",
     )
@@ -108,11 +108,16 @@ def test_agent_uses_previews_and_traces_calls(
         requested(
             tool_call("call-01", "list_tables"),
             tool_call("call-02", "describe_table", table="orders"),
+            cached_tokens=0,
         ),
-        requested(tool_call("call-03", "run_sql", query="SELECT * FROM orders ORDER BY id")),
+        requested(
+            tool_call("call-03", "describe_table", table="orders", sample_columns=["note"]),
+            tool_call("call-04", "run_sql", query="SELECT * FROM orders ORDER BY id"),
+            cached_tokens=64,
+        ),
         ChatResponse(
             Message("assistant", "Analyse établie à partir de r1."),
-            TokenUsage(200, 20),
+            TokenUsage(200, 20, 128),
             model="scripted",
         ),
     )
@@ -124,8 +129,8 @@ def test_agent_uses_previews_and_traces_calls(
     assert result.status == "completed"
     assert result.answer == "Analyse établie à partir de r1."
     assert result.steps == 3
-    assert result.tool_calls == 3
-    assert result.usage == TokenUsage(400, 40)
+    assert result.tool_calls == 4
+    assert result.usage == TokenUsage(400, 40, 192)
     assert result.estimated_cost_usd == pytest.approx(0.00096)
     assert result.store.get("r1").rows[-1] == (6, "note-6")
 
@@ -144,9 +149,12 @@ def test_agent_uses_previews_and_traces_calls(
     ]
     assert second_messages[3].content == '{"tables":["orders"]}'
     assert second_messages[4].content is not None
-    assert len(json.loads(second_messages[4].content)["sample_rows"]) == 3
+    assert "sample_rows" not in json.loads(second_messages[4].content)
     last_messages, _ = client.requests[2]
     assert last_messages[: len(second_messages)] == second_messages
+    sample_reply = json.loads(last_messages[-2].content or "")
+    assert sample_reply["sample_columns"] == ["note"]
+    assert sample_reply["sample_rows"] == [["note-1"], ["note-2"], ["note-3"]]
     last_tool_reply = last_messages[-1]
     assert last_tool_reply.content is not None
     assert json.loads(last_tool_reply.content) == {
@@ -164,9 +172,11 @@ def test_agent_uses_previews_and_traces_calls(
     assert model_events[0]["usage"] == {
         "prompt_tokens": 100,
         "completion_tokens": 10,
+        "cached_prompt_tokens": 0,
         "total_tokens": 110,
     }
     assert "note-6" not in trace
+    assert events[-1]["usage"]["cached_prompt_tokens"] == 192
     assert events[-1]["estimated_cost_usd"] == pytest.approx(0.00096)
     assert all(event.get("duration_ms", 0) >= 0 for event in events)
 
@@ -184,8 +194,9 @@ def test_returns_recoverable_tool_errors(tmp_path: Path, local_database: SqlTool
             tool_call("call-03", "missing_tool"),
             tool_call("call-04", "list_tables", extra="bad"),
             tool_call("call-05", "run_sql", query=123),
+            tool_call("call-06", "describe_table", table="orders", sample_columns=[123]),
         ),
-        requested(tool_call("call-06", "run_sql", query="SELECT COUNT(*) AS count FROM orders")),
+        requested(tool_call("call-07", "run_sql", query="SELECT COUNT(*) AS count FROM orders")),
         ChatResponse(Message("assistant", "Calcul terminé.")),
     )
     result = AnalysisAgent(client, sql=local_database, runs_dir=tmp_path / "runs").run("Analyse.")
@@ -199,6 +210,7 @@ def test_returns_recoverable_tool_errors(tmp_path: Path, local_database: SqlTool
     assert "Outil inconnu" in outputs[2]
     assert "Arguments attendus" in outputs[3]
     assert "texte non vide" in outputs[4]
+    assert "sample_columns" in outputs[5]
     assert len(result.store) == 1
     assert result.store.get("r1").rows == ((6,),)
     assert result.usage is None

@@ -3,29 +3,35 @@
 const stages = {
   question: { label: "Demande", sub: "Entrée utilisateur", glyph: "IN", x: 50, y: 18,
     about: "La question définit le périmètre de l’analyse et accompagne chaque appel au modèle." },
-  model: { label: "Modèle", sub: "Décide du prochain outil", glyph: "AI", x: 50, y: 91,
+  model: { label: "Modèle", llm: true, sub: "Décide du prochain outil", glyph: "AI", x: 50, y: 91,
     about: "Le LLM reçoit les règles métier Olist dans le prompt système, avec la demande, les outils disponibles et l’historique des échanges. Il consulte le schéma des tables utiles à la demande." },
   list_tables: { label: "list_tables", tool: true,
-    about: "Liste les noms des tables et des vues SQLite. Le LLM peut utiliser ces noms dans describe_table ou dans une requête SQL." },
+    about: "Permet au modèle de découvrir les tables et les vues disponibles dans SQLite.",
+    context: "Réponse intégrale. Tous les noms des tables et vues applicatives sont ajoutés à l’historique du modèle." },
   describe_table: { label: "describe_table", tool: true,
-    about: "Le LLM fournit le nom d’une table ou d’une vue. Le code vérifie qu’elle existe dans SQLite, puis renvoie ses colonnes, leurs types, les clés et jusqu’à trois lignes d’exemple." },
+    about: "Décrit une table ou une vue SQLite à partir de son nom.",
+    context: "Réponse limitée au schéma par défaut. Le modèle reçoit les colonnes, leurs types et les clés. Avec sample_columns, il reçoit aussi jusqu’à trois lignes pour les colonnes demandées. Les textes d’exemple sont tronqués à 200 caractères." },
   get_data_dictionary: { label: "get_data_dictionary", tool: true, legacy: true,
-    about: "Ancien outil qui chargeait le dictionnaire Olist complet." },
+    about: "Ancien outil de consultation du dictionnaire Olist.",
+    context: "Réponse intégrale. Le texte complet du dictionnaire était ajouté à l’historique, puis renvoyé aux appels suivants." },
   run_sql: { label: "run_sql", tool: true,
-    about: "Le LLM prépare une requête SQL. Le code vérifie qu’il s’agit d’un seul SELECT en lecture seule, puis l’exécute dans SQLite. Il stocke le résultat complet dans ResultStore et renvoie au LLM son identifiant et jusqu’à cinq lignes d’aperçu." },
+    about: "Vérifie et exécute une requête SELECT en lecture seule dans SQLite.",
+    context: "Aperçu compact. Le résultat complet reste dans ResultStore. Le modèle reçoit son identifiant, les colonnes, leurs types, le nombre total de lignes et les cinq premières lignes au maximum. Les textes de l’aperçu sont tronqués à 200 caractères." },
   create_chart: { label: "create_chart", tool: true,
-    about: "Le LLM choisit un résultat SQL, un type de graphique, les colonnes à tracer et un titre. Le code vérifie les paramètres et la compatibilité des données, puis génère le PNG avec Matplotlib. Le LLM reçoit l’identifiant du graphique pour l’inclure dans le rapport." },
+    about: "Génère un graphique PNG à partir d’un résultat SQL avec Matplotlib.",
+    context: "Métadonnées seules. Le modèle reçoit les identifiants du graphique et du résultat SQL, ainsi que le nombre de lignes tracées et le nombre de lignes écartées pour valeurs manquantes. Le PNG reste sur disque." },
   write_report: { label: "write_report", tool: true,
-    about: "Le LLM rédige un brouillon structuré et fournit ses références aux résultats SQL et aux graphiques. Le code valide le format, résout les références et signale les chiffres non reliés à un résultat SQL. Une fois le rapport accepté, l’analyse se termine et la commande produit le PDF." },
+    about: "Valide le brouillon, résout ses références SQL et prépare le rapport pour le rendu PDF.",
+    context: "Un rapport accepté termine la boucle. La confirmation et le nombre de chiffres sans référence restent dans la trace. Si la validation échoue et qu’un autre tour est possible, le modèle reçoit le message d’erreur pour corriger le brouillon." },
   pdf: { label: "PDF", sub: "ReportLab", glyph: "PDF", local: true,
     about: "ReportLab transforme le rapport validé en PDF à la fin de l’analyse." },
-  pdf_review: { label: "Juge visuel", sub: "Pages du PDF", glyph: "AI",
+  pdf_review: { label: "Juge visuel", llm: true, sub: "Pages du PDF", glyph: "AI",
     about: "Un modèle multimodal examine les images des pages du PDF final et propose des corrections de mise en page." },
 };
 
 const byId = (id) => document.getElementById(id);
 const number = new Intl.NumberFormat("fr-FR", { maximumFractionDigits: 2 });
-const money = new Intl.NumberFormat("fr-FR", { minimumFractionDigits: 4, maximumFractionDigits: 6 });
+const money = new Intl.NumberFormat("fr-FR", { minimumFractionDigits: 2, maximumFractionDigits: 6 });
 const missing = "—";
 const state = { events: [], index: 0, stage: "question", filter: "all", tab: "overview", timer: null };
 const nodes = new Map();
@@ -111,25 +117,53 @@ function displayStatus(status) {
   return Object.hasOwn(labels, status) ? labels[status] : (status || "Trace partielle");
 }
 
+function renderMetrics(id, values) {
+  byId(id).replaceChildren(...values.map(([label, value]) => {
+    const metric = element("div", "metric");
+    metric.append(element("span", "", label), element("strong", "", value));
+    return metric;
+  }));
+}
+
+function sumMeasured(events, measure) {
+  const values = events.map(measure);
+  if (values.length && values.every(Number.isFinite)) {
+    return values.reduce((total, value) => total + value, 0);
+  }
+}
+
 function renderHeader() {
   const start = state.events.find((event) => event.event === "run_start");
   const end = endEvent();
+  const pdf = state.events.findLast((event) => event.event === "pdf_written");
+  const deliveryMs = pdf?.delivery_duration_ms
+    ?? (Date.parse(pdf?.time_utc) - Date.parse(start?.time_utc));
+  const hasDeliveryDuration = Number.isFinite(deliveryMs) && deliveryMs >= 0;
   const status = end?.status || (end?.event === "run_aborted" ? "aborted" : "partial");
   byId("question").textContent = start?.question || "Question absente de cette trace.";
   const runStatus = byId("run-status");
   runStatus.textContent = `${state.source} · ${displayStatus(status)}`;
   runStatus.dataset.state = status;
-  const values = [
+  renderMetrics("metrics", [
     ["Appels au modèle d’analyse", end?.steps ?? state.events.filter((event) => event.event === "model_call").length],
     ["Appels d’outils", end?.tool_calls ?? state.events.filter((event) => event.event === "tool_call").length],
-    ["Durée de l’analyse", duration(end?.duration_ms)],
-    ["Tokens déclarés", Number.isFinite(end?.usage?.total_tokens) ? number.format(end.usage.total_tokens) : missing],
-  ];
-  byId("metrics").replaceChildren(...values.map(([label, value]) => {
-    const metric = element("div", "metric");
-    metric.append(element("span", "", label), element("strong", "", value));
-    return metric;
-  }));
+    hasDeliveryDuration
+      ? ["Durée jusqu'à livraison du rapport", duration(deliveryMs)]
+      : ["Durée de l’analyse", duration(end?.duration_ms)],
+  ]);
+  const reviews = state.events.filter((event) => event.event === "pdf_review");
+  const format = (value, formatter) => Number.isFinite(value) ? formatter.format(value) : missing;
+  const pair = (measure, formatter, showRoles = false) => {
+    const main = format(measure(end), formatter);
+    const judge = format(sumMeasured(reviews, measure), formatter);
+    return showRoles ? `${main} principal / ${judge} juge` : `${main} / ${judge}`;
+  };
+  renderMetrics("model-metrics", [
+    ["Tokens en cache", pair((event) => event?.usage?.cached_prompt_tokens, number, true)],
+    ["Tokens d’entrée", pair((event) => event?.usage?.prompt_tokens, number)],
+    ["Tokens de sortie", pair((event) => event?.usage?.completion_tokens, number)],
+    ["Coût estimé (USD)", pair((event) => event?.estimated_cost_usd, money)],
+  ]);
 }
 
 function timelineLabel(event) {
@@ -139,7 +173,11 @@ function timelineLabel(event) {
     case "tool_call": return [event.name || "Outil", event.output?.error ? "Erreur renvoyée au modèle" : `Tour ${event.step ?? "—"} · exécution locale`, "FN"];
     case "run_end": return [displayStatus(event.status), "Fin de l’analyse", "OK"];
     case "pdf_written": return ["PDF créé", event.filename, "PDF"];
-    case "pdf_review": return [event.error ? "Relecture incomplète" : "Avis du juge visuel", event.model, "AI"];
+    case "pdf_review": {
+      const label = event.error ? "Relecture incomplète" : "Avis du juge visuel";
+      const page = Number.isSafeInteger(event.target_page) ? ` · page ${event.target_page}` : "";
+      return [label + page, event.model, "AI"];
+    }
     case "run_aborted": return ["Exécution interrompue", event.error_type, "!"];
     default: return [event.event, "Événement importé", "·"];
   }
@@ -168,10 +206,13 @@ function renderTimeline() {
     const item = element("button", "timeline-entry");
     item.type = "button";
     item.dataset.index = index;
+    const stage = stages[eventStage(event)];
+    if (event.event === "tool_call") item.dataset.kind = "tool";
+    else if (stage.llm) item.dataset.kind = "model";
     const description = element("span");
     description.append(element("strong", "", label), element("span", "event-detail", detail));
     item.append(
-      element("span", `glyph${event.event === "tool_call" ? " local" : ""}`, glyph),
+      element("span", `glyph${stage.local ? " local" : ""}`, glyph),
       description,
       element("span", "event-duration", Number.isFinite(event.duration_ms) ? duration(event.duration_ms) : ""),
     );
@@ -181,9 +222,9 @@ function renderTimeline() {
   }
 }
 
-function block(parent, label, content) {
+function block(parent, label, content, className = "inspect-block") {
   if (content === undefined || content === null || content === "") return;
-  const section = element("section", "inspect-block");
+  const section = element("section", className);
   section.append(element("h4", "", label));
   section.append(typeof content === "string" ? element("p", "", content) : content);
   parent.append(section);
@@ -197,17 +238,20 @@ function code(text, language = "text") {
   return pre;
 }
 
-function json(value) {
-  return code(JSON.stringify(value, null, 2), "json");
+function json(value, replacer = null) {
+  return code(JSON.stringify(value, replacer, 2), "json");
 }
 
 function renderPrompt(panel, event) {
   const request = event?.request ?? event;
   const messages = Array.isArray(request?.messages) ? request.messages : [];
-  for (const [role, label] of [["system", "Système"], ["user", "Utilisateur (exemple de demande)"]]) {
+  for (const [role, label] of [["system", "Système"], ["user", "Utilisateur"]]) {
     const content = messages.find((message) => message?.role === role)?.content;
-    block(panel, label, typeof content === "string" ? code(content)
-      : content == null ? "Message absent de la trace." : json(content));
+    const prompt = Array.isArray(content) ? content
+      .filter((part) => part?.type === "text" && typeof part.text === "string")
+      .map((part) => part.text).join("\n\n") : content;
+    block(panel, label, typeof prompt === "string" ? code(prompt)
+      : prompt == null ? "Message absent de la trace." : json(prompt));
   }
 
   if (Array.isArray(request?.tools) && request.tools.length) {
@@ -218,22 +262,75 @@ function renderPrompt(panel, event) {
   }
 }
 
-function renderRequestJson(panel, event) {
-  if (event.request) {
-    panel.append(json(event.request));
+function requestImages(request) {
+  if (!Array.isArray(request?.messages)) return [];
+  return request.messages.flatMap((message) => Array.isArray(message?.content)
+    ? message.content.filter((part) => part?.type === "image_url").map((part) => part.image_url) : []);
+}
+
+function modelTurnAction(event) {
+  if (event.event === "pdf_review") {
+    if (event.error) return "La relecture est incomplète.";
+    if (!event.review && !event.response?.content) return "Aucun avis enregistré pour ce tour.";
+    if (Number.isSafeInteger(event.target_page)) {
+      return `Le juge a rendu un avis sur la page ${event.target_page}.`;
+    }
+    const pages = Array.isArray(event.pages)
+      ? event.pages.map((page) => page?.number).filter(Number.isSafeInteger) : [];
+    if (!pages.length) return "Le juge a rendu un avis de mise en page.";
+    const label = pages.length === 1 ? "la page" : "les pages";
+    return `Le juge a rendu un avis sur ${label} ${pages.join(", ")}.`;
+  }
+  if (event.error) return "L’appel au modèle a échoué.";
+  if (["length", "model_length", "error", "content_filter"].includes(event.finish_reason)) {
+    return "Le modèle a renvoyé une réponse interrompue.";
+  }
+  const calls = event.response?.tool_calls;
+  const tools = Array.isArray(calls) ? calls.map((call) => call?.function?.name).filter(Boolean) : [];
+  if (tools.length) return `Le modèle a demandé ${tools.join(", ")}.`;
+  if (event.response?.content) return "Le modèle a répondu en texte.";
+  return "Aucune action enregistrée pour ce tour.";
+}
+
+function renderModelTurn(panel, event) {
+  if (!event) {
+    panel.append(element("p", "", "Aucun appel enregistré pour ce nœud."));
     return;
   }
-
-  const { messages, tools } = event;
-  if (state.demo) {
-    const request = { ...DEMO_REQUEST_SETTINGS, messages };
-    if (tools?.length) request.tools = tools;
-    panel.append(element("p", "", "Exemple de requête Mistral pour ce tour simulé."), json(request));
-    return;
+  block(panel, "Action du modèle", modelTurnAction(event));
+  let request = event.request;
+  if (!request && (event.messages || event.tools)) {
+    request = { messages: event.messages, tools: event.tools };
+    panel.append(element("p", "", "Messages conservés dans la trace. Corps HTTP indisponible."));
   }
-
-  panel.append(element("p", "", "Cette trace contient les messages et les outils du tour. Le corps HTTP complet n’a pas été enregistré."));
-  if (messages || tools) panel.append(json({ messages, tools }));
+  const images = requestImages(request);
+  const content = element("div", "turn-request");
+  if (!request) {
+    content.append(element("p", "", "Requête absente de la trace."));
+  } else if (images.length) {
+    const shortenImages = (key, value) => key === "image_url" && images.includes(value)
+      ? "[Image de page ci-dessous]" : value;
+    content.append(json(request, shortenImages));
+    const download = element("button", "quiet-button", "Télécharger le JSON complet");
+    download.type = "button";
+    download.addEventListener("click", () => {
+      const url = URL.createObjectURL(new Blob([JSON.stringify(request)], { type: "application/json" }));
+      const link = element("a");
+      link.href = url;
+      link.download = "requete-llm.json";
+      link.click();
+      setTimeout(() => URL.revokeObjectURL(url), 1_000);
+    });
+    content.append(download);
+  } else {
+    content.append(json(request));
+  }
+  block(panel, "Requête envoyée", content, "inspect-block turn-block");
+  if (event.event === "pdf_review") renderPdfPages(panel, event, images);
+  block(panel, "Réponse reçue", event.response != null ? json(event.response)
+    : event.review ? element("p", "review-text", event.review) : "Réponse absente de la trace.",
+  "inspect-block turn-block");
+  if (event.error) block(panel, "Erreur", event.error);
 }
 
 function findToolSchema(events, name) {
@@ -252,50 +349,47 @@ function renderToolSchema(panel, name, step) {
     panel.append(json(schema));
     return;
   }
-  block(panel, "Schéma de la démonstration", json(findToolSchema(DEMO_TRACE, name)));
+  const fallback = findToolSchema(DEFAULT_TRACE, name);
+  block(panel, "Schéma de référence", fallback ? json(fallback) : "Schéma absent de la trace.");
 }
 
-function toolCall(id, name, args) {
-  return { id, type: "function", function: { name, arguments: args } };
-}
-
-function renderToolExchange(panel, call, response) {
-  block(panel, "Appel de l’outil", json(call));
-  block(panel, "Réponse de l’outil", response === undefined
-    ? "Réponse absente de la trace." : json(response));
-}
-
-function renderToolExample(panel, name, event) {
-  const inTrace = event?.event === "tool_call";
-  const events = inTrace ? state.events : DEMO_TRACE;
-  const example = inTrace ? event : events.find((entry) => entry.event === "tool_call" && entry.name === name);
-  if (!example) {
-    const { id, args, output } = DEMO_TOOL_EXAMPLES[name];
-    panel.append(element("p", "", "Exemple illustratif."));
-    renderToolExchange(panel, toolCall(id, name, JSON.stringify(args)),
-      { role: "tool", tool_call_id: id, name, content: JSON.stringify(output) });
+function renderToolTurn(panel, event) {
+  if (event?.event !== "tool_call") {
+    panel.append(element("p", "", "Aucun appel de cet outil sélectionné dans la chronologie."));
     return;
   }
-
-  const parent = events.find((entry) => entry.event === "model_call" && entry.step === example.step);
+  const parent = state.events.find((entry) => entry.event === "model_call" && entry.step === event.step);
   const calls = parent?.response?.tool_calls;
-  const call = (Array.isArray(calls) && calls.find((item) => item?.id === example.tool_call_id))
-    || toolCall(example.tool_call_id, name, example.arguments);
-  const nextCalls = events.slice(events.indexOf(example) + 1);
-  let response;
-  for (const entry of nextCalls) {
-    if (entry.event !== "model_call") continue;
-    const messages = (entry.request ?? entry).messages;
-    if (!Array.isArray(messages)) continue;
-    response = messages.find((message) => message?.role === "tool"
-      && message.tool_call_id === example.tool_call_id);
-    if (response) break;
+  const recordedCall = Array.isArray(calls) && calls.find((call) => call?.id === event.tool_call_id);
+  const call = recordedCall || {
+    id: event.tool_call_id,
+    type: "function",
+    function: { name: event.name, arguments: event.arguments },
+  };
+  block(panel, "Demande à l’outil", json(call), "inspect-block turn-block");
+  block(panel, "Réponse de l’outil", event.output === undefined
+    ? "Réponse absente de la trace." : json(event.output), "inspect-block turn-block");
+}
+
+function renderToolContext(panel, name) {
+  const output = DEMO_TOOL_EXAMPLES[name];
+  const content = element("div");
+  content.append(element("p", "", stages[name].context));
+
+  const sent = name === "write_report" && output?.accepted === true
+    ? "Aucun envoi. Le rapport a terminé la boucle."
+    : output === undefined ? "Exemple indisponible." : "Identique";
+  const comparison = element("dl", "tool-context-comparison");
+  for (const [label, body] of [
+    ["Sortie de l’outil (exemple)", output === undefined ? "Exemple indisponible." : json(output)],
+    ["Envoyé au modèle (exemple)", sent],
+  ]) {
+    const value = element("dd");
+    value.append(body);
+    comparison.append(element("dt", "", label), value);
   }
-  if (!inTrace) panel.append(element("p", "", "Exemple tiré de la démonstration."));
-  if (!response && example.output !== undefined) {
-    panel.append(element("p", "", "La réponse affichée est la sortie locale enregistrée."));
-  }
-  renderToolExchange(panel, call, response ?? example.output);
+  content.append(comparison);
+  block(panel, "Gestion du contexte", content, "inspect-block tool-context");
 }
 
 function chips(parent, values) {
@@ -327,7 +421,7 @@ function renderLaunch(panel) {
     && typeof event.model === "string" && !event.model.startsWith("scripted"))?.model;
   if (activeModel) commandParts.push("--model=" + quotePowerShell(activeModel));
   const review = state.events.find((event) => event.event === "pdf_review");
-  if (state.demo || review) commandParts.push("--review-pdf");
+  if (review) commandParts.push("--review-pdf");
   if (typeof review?.model === "string") {
     commandParts.push("--review-model=" + quotePowerShell(review.model));
   }
@@ -336,9 +430,7 @@ function renderLaunch(panel) {
   }
   commandParts.push("-- " + quotePowerShell(start.question));
   const command = commandParts.join(" ");
-  panel.append(element("p", "", state.demo
-    ? "La démo utilise un client scripté. Cette commande relance la même question avec Mistral."
-    : "Commande reconstituée à partir des paramètres disponibles dans la trace."));
+  panel.append(element("p", "", "Commande reconstituée à partir des paramètres disponibles dans la trace."));
   const preview = code(command, "powershell");
   block(panel, "Commande PowerShell", preview);
   panel.append(element("p", "", "L’option --max-steps limite les appels au modèle. Un appel peut demander plusieurs outils."));
@@ -365,32 +457,37 @@ function renderLaunch(panel) {
 }
 
 function renderPdfReview(panel, event) {
+  const pageScope = Number.isSafeInteger(event?.target_page)
+    ? "Cette trace évalue une page cible par appel, avec ses voisines comme contexte."
+    : "Chaque appel regroupe jusqu’à quatre pages avec leurs numéros, la question initiale et les consignes du juge.";
+  block(panel, "Envoi au juge",
+    "Une image JPEG par page, encodée en Base64 (côté long de 1 440 px, qualité 82). "
+    + pageScope);
   if (!event) {
     block(panel, "Relecture visuelle", "Lance la commande avec --review-pdf, puis importe sa trace.");
     return;
   }
   chips(panel, [event.model, duration(event.duration_ms)]);
   if (event.error) block(panel, "Relecture incomplète", event.error);
-  if (event.review) {
-    const review = element("p", "review-text", event.review);
-    block(panel, "Avis du juge", review);
-  }
+  if (event.usage) block(panel, "Compteurs de tokens", json(event.usage));
 }
 
-function renderPdfPages(panel, event) {
-  if (!Array.isArray(event?.pages) || !event.pages.length) {
-    panel.append(element("p", "", "Aucune image de page dans cet événement."));
-    return;
-  }
+function renderPdfPages(panel, event, images) {
+  if (!Array.isArray(event.pages)) return;
   const list = element("div", "review-pages");
-  for (const page of event.pages) {
+  for (const [index, page] of event.pages.entries()) {
     if (!Number.isSafeInteger(page?.number) || page.number < 1) continue;
-    if (typeof page.image !== "string" || !/^data:image\/jpeg;base64,[A-Za-z0-9+/]+=*$/.test(page.image)) continue;
-    const label = `Page ${page.number}`;
+    const source = images[index] ?? page.image;
+    if (typeof source !== "string" || !/^data:image\/jpeg;base64,[A-Za-z0-9+/]+=*$/.test(source)) continue;
+    const hasTarget = Number.isSafeInteger(event.target_page);
+    const target = page.number === event.target_page;
+    const role = hasTarget ? (target ? " · à évaluer" : " · contexte") : "";
+    const label = `Page ${page.number}${role}`;
     const button = element("button", "review-page");
     button.type = "button";
+    if (target) button.dataset.target = "";
     const image = element("img");
-    image.src = page.image;
+    image.src = source;
     image.alt = "";
     image.loading = "lazy";
     button.append(image, element("span", "", label));
@@ -398,14 +495,14 @@ function renderPdfPages(panel, event) {
       const dialog = byId("review-dialog");
       const preview = byId("review-preview");
       preview.alt = label;
-      preview.src = page.image;
+      preview.src = source;
       byId("review-page-title").textContent = label;
       dialog.showModal();
     });
     list.append(button);
   }
   const heading = Number.isSafeInteger(event.total_pages)
-    ? `Pages du lot · ${event.total_pages} au total` : "Pages du lot";
+    ? `Pages envoyées · ${event.total_pages} au total` : "Pages envoyées";
   if (list.childElementCount) block(panel, heading, list);
 }
 
@@ -414,10 +511,15 @@ function renderInspector() {
   const tabs = byId("tabs").querySelectorAll("button");
   for (const button of tabs) {
     const { stage: scope, tab } = button.dataset;
-    if (tab === "json") button.textContent = state.stage === "model" ? "Exemple d’appel LLM" : "JSON";
-    button.hidden = (scope === "tool" && !stage.tool)
-      || (tab === "json" && Boolean(stage.tool || ["pdf", "pdf_review"].includes(state.stage)))
-      || Boolean(scope && scope !== "tool" && scope !== state.stage);
+    if (tab === "overview") {
+      if (stage.tool) button.replaceChildren("Aperçu et gestion", element("br"), "du contexte");
+      else button.textContent = "Aperçu";
+    }
+    const inScope = scope === "tool" ? stage.tool
+      : scope === "llm" ? stage.llm
+        : scope === "turn" ? (stage.tool || stage.llm)
+          : !scope || scope === state.stage;
+    button.hidden = !inScope || (tab === "json" && Boolean(stage.tool || stage.llm || state.stage === "pdf"));
     if (button.hidden && tab === state.tab) state.tab = "overview";
   }
   for (const button of tabs) {
@@ -450,32 +552,30 @@ function renderInspector() {
     panel.append(intro, code('_paragraph(report.title, styles["title"])'), detail);
     return;
   }
-  if (state.tab === "pdf-pages") {
-    renderPdfPages(panel, event);
+  if (state.tab === "turn") {
+    if (stage.tool) renderToolTurn(panel, event);
+    else renderModelTurn(panel, event);
     return;
   }
   if (state.tab === "tool-schema") {
     renderToolSchema(panel, state.stage, event?.step);
     return;
   }
-  if (state.tab === "tool-example") {
-    renderToolExample(panel, state.stage, event);
-    return;
-  }
   if (state.tab === "json") {
-    if (event?.event === "model_call") renderRequestJson(panel, event);
-    else panel.append(event ? json(event) : element("p", "", "Aucun événement JSON enregistré pour cette étape."));
+    panel.append(event ? json(event) : element("p", "", "Aucun événement JSON enregistré pour cette étape."));
     return;
   }
   if (event?.event === "run_end") {
     panel.append(element("h3", "", "Fin de l’analyse"));
   } else {
     panel.append(element("h3", "", stage.label), element("p", "", stage.about));
-    if (stage.tool) return;
+  }
+  if (stage.tool) {
+    renderToolContext(panel, state.stage);
+    if (event?.event !== "run_end") return;
   }
   if (state.stage === "pdf") {
-    block(panel, "État", event?.filename || (state.demo ? "Le PDF a été généré pour cette démonstration."
-      : "La trace JSONL importée ne permet pas de confirmer qu’un fichier PDF a été écrit."));
+    block(panel, "État", event?.filename || "La trace ne permet pas de confirmer qu’un fichier PDF a été écrit.");
     return;
   }
   if (state.stage === "pdf_review") {
@@ -497,10 +597,6 @@ function renderInspector() {
       }
       break;
     case "model_call":
-      chips(panel, [event.model, duration(event.duration_ms), event.finish_reason]);
-      if (Array.isArray(event.response?.tool_calls)) {
-        block(panel, "Outils demandés", event.response.tool_calls.map((call) => call?.function?.name).filter(Boolean).join(", "));
-      }
       if (event.error) block(panel, "Erreur", event.error);
       if (event.usage) block(panel, "Compteurs de tokens", json(event.usage));
       break;
@@ -525,7 +621,7 @@ function renderSelection() {
   }
   for (const [key, node] of nodes) {
     node.setAttribute("aria-pressed", String(state.stage === key));
-    node.dataset.observed = String((key === "pdf" && state.demo) || state.events.some((event) => observed(key, event)));
+    node.dataset.observed = String(state.events.some((event) => observed(key, event)));
   }
   byId("position").textContent = `Événement ${state.index + 1} / ${state.events.length}`;
   byId("previous").disabled = state.index === 0;
@@ -562,23 +658,19 @@ function step(increment, scroll = false) {
   }
 }
 
-function loadTrace(events, source, demo = false) {
+function loadTrace(events, source) {
   stop();
   state.events = events;
   state.source = source;
-  state.demo = demo;
   state.filter = "all";
-  const exampleIndex = demo
-    ? events.findIndex((event) => event.event === "model_call" && event.step === 4)
-    : -1;
-  state.tab = exampleIndex >= 0 ? "json" : "overview";
+  state.tab = "overview";
   for (const button of byId("filters").querySelectorAll("button")) {
     button.setAttribute("aria-pressed", String(button.dataset.filter === state.filter));
   }
   byId("import-error").hidden = true;
   renderHeader();
   renderTimeline();
-  select(Math.max(0, exampleIndex));
+  select(0);
 }
 
 function parseTrace(raw) {
@@ -594,22 +686,108 @@ function parseTrace(raw) {
   return records;
 }
 
+const tracePicker = byId("trace-picker");
+const traceOptions = byId("trace-options");
+const traceChoices = new Map();
+const traceDate = new Intl.DateTimeFormat("fr-FR", { dateStyle: "short", timeStyle: "short" });
+let displayedTrace = "default";
+let traceLoad = 0;
+
+function addTraceChoice(key, choice, label = choice.path) {
+  if (traceChoices.has(key)) return;
+  traceChoices.set(key, choice);
+  const option = element("option", "", label);
+  option.value = key;
+  traceOptions.append(option);
+  traceOptions.hidden = false;
+}
+
+function addTraceFile(file) {
+  const key = JSON.stringify([file.name, file.lastModified, file.size]);
+  addTraceChoice(key, { path: file.name, file });
+  return key;
+}
+
+function addLocalTraces() {
+  const entries = globalThis.OLIST_TRACE_INDEX;
+  if (!Array.isArray(entries)) return;
+  for (const entry of entries) {
+    if (typeof entry.path !== "string" || !entry.path.endsWith(".jsonl")) continue;
+    const parts = entry.path.split("/");
+    if (parts.some((part) => !part || part === "." || part === "..")) continue;
+    const folder = parts.at(-2);
+    const name = parts.at(-1);
+    const id = name === "trace.jsonl" && folder ? folder.slice(0, 8) : name;
+    const labels = [Number.isFinite(entry.updated_ms) ? traceDate.format(entry.updated_ms) : "", id];
+    if (typeof entry.question === "string") labels.push(entry.question.slice(0, 76));
+    addTraceChoice(`local:${entry.path}`, { path: entry.path, parts }, labels.filter(Boolean).join(" · "));
+  }
+}
+
+function readLocalTrace(parts) {
+  return new Promise((resolve, reject) => {
+    const script = element("script");
+    const fail = () => {
+      script.remove();
+      reject(new Error("Trace locale indisponible."));
+    };
+    script.onload = () => {
+      if (!Array.isArray(script.traceEvents)) {
+        fail();
+        return;
+      }
+      script.remove();
+      resolve(script.traceEvents);
+    };
+    script.onerror = fail;
+    script.src = `../runs/${parts.map(encodeURIComponent).join("/")}.js`;
+    document.head.append(script);
+  });
+}
+
+function showImportError(message) {
+  const banner = byId("import-error");
+  banner.textContent = message;
+  banner.hidden = false;
+}
+
+async function openTraceChoice(choice) {
+  const current = ++traceLoad;
+  try {
+    if (choice === "default") {
+      loadTrace(DEFAULT_TRACE, "trace.jsonl");
+    } else {
+      const { file, path, parts } = traceChoices.get(choice);
+      if (file?.size > 16_000_000) throw new Error("Le fichier dépasse la limite d’import de 16 Mo.");
+      const records = file ? parseTrace(await file.text()) : await readLocalTrace(parts);
+      if (current !== traceLoad) return;
+      loadTrace(records, path);
+    }
+    displayedTrace = choice;
+  } catch (error) {
+    if (current === traceLoad) showImportError(error.message);
+  } finally {
+    if (current === traceLoad) tracePicker.value = displayedTrace;
+  }
+}
+
 setupMap();
-loadTrace(DEMO_TRACE, "Exemple Olist", true);
-byId("demo-button").addEventListener("click", () => loadTrace(DEMO_TRACE, "Exemple Olist", true));
-byId("trace-file").addEventListener("change", async (event) => {
+addLocalTraces();
+loadTrace(DEFAULT_TRACE, "trace.jsonl");
+tracePicker.addEventListener("change", () => {
+  const { value } = tracePicker;
+  if (value === "file") {
+    tracePicker.value = displayedTrace;
+    byId("trace-file").click();
+  } else {
+    openTraceChoice(value);
+  }
+});
+byId("trace-file").addEventListener("change", (event) => {
   const input = event.currentTarget;
   const file = input.files[0];
-  if (!file) return;
-  try {
-    if (file.size > 16_000_000) throw new Error("Le fichier dépasse la limite d’import de 16 Mo.");
-    loadTrace(parseTrace(await file.text()), file.name);
-  } catch (error) {
-    byId("import-error").textContent = error.message;
-    byId("import-error").hidden = false;
-  } finally {
-    input.value = "";
-  }
+  input.value = "";
+  if (file) openTraceChoice(addTraceFile(file));
 });
 byId("filters").addEventListener("click", (event) => {
   const button = event.target.closest("button[data-filter]");

@@ -77,10 +77,21 @@ class ToolSpec:
 class TokenUsage:
     prompt_tokens: int
     completion_tokens: int
+    cached_prompt_tokens: int | None = None
 
     @property
     def total_tokens(self) -> int:
         return self.prompt_tokens + self.completion_tokens
+
+    def to_payload(self) -> dict[str, int]:
+        payload = {
+            "prompt_tokens": self.prompt_tokens,
+            "completion_tokens": self.completion_tokens,
+            "total_tokens": self.total_tokens,
+        }
+        if self.cached_prompt_tokens is not None:
+            payload["cached_prompt_tokens"] = self.cached_prompt_tokens
+        return payload
 
 
 @dataclass(frozen=True, slots=True)
@@ -89,16 +100,25 @@ class TokenPricing:
 
     input_usd_per_million: float
     output_usd_per_million: float
+    cached_input_usd_per_million: float | None = None
 
     def __post_init__(self) -> None:
-        for rate in (self.input_usd_per_million, self.output_usd_per_million):
+        rates = [self.input_usd_per_million, self.output_usd_per_million]
+        if self.cached_input_usd_per_million is not None:
+            rates.append(self.cached_input_usd_per_million)
+        for rate in rates:
             if not math.isfinite(rate) or rate < 0:
                 raise ValueError("Les tarifs doivent être finis et positifs ou nuls.")
 
     def estimate_usd(self, usage: TokenUsage) -> float:
-        return usage.prompt_tokens * (
-            self.input_usd_per_million / 1_000_000
-        ) + usage.completion_tokens * (self.output_usd_per_million / 1_000_000)
+        cached_rate = self.cached_input_usd_per_million
+        cached_tokens = usage.cached_prompt_tokens or 0
+        input_cost = (usage.prompt_tokens - cached_tokens) * self.input_usd_per_million
+        cache_cost = cached_tokens * (
+            self.input_usd_per_million if cached_rate is None else cached_rate
+        )
+        output_cost = usage.completion_tokens * self.output_usd_per_million
+        return (input_cost + cache_cost + output_cost) / 1_000_000
 
 
 @dataclass(frozen=True, slots=True)

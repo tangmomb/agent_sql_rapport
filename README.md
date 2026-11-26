@@ -20,28 +20,26 @@ Pour retrouver les composants dans le dépôt, consulte
 
 ### Explorer le pipeline dans le navigateur
 
-Ouvre [le studio local](studio/index.html) dans ton navigateur. La démonstration
-Olist est disponible dès l’ouverture. Clique une étape du graphe pour lire son
+Ouvre [le studio local](studio/index.html) dans ton navigateur. Au démarrage,
+le Studio affiche une exécution Olist de Mistral avec génération du PDF, relecture
+visuelle, compteurs de tokens et coûts estimés. Clique une étape du graphe pour lire son
 rôle et ses données, ou utilise les contrôles sous « Carte du pipeline » pour
 suivre les événements dans l’ordre. L’inspecteur affiche un aperçu et le JSON
 de l’événement sélectionné. Sur le nœud **Demande**, l’onglet **Lancement**
 permet de copier une commande PowerShell reconstituée à partir de la question
 et des paramètres de la trace. `--max-steps` limite les appels au modèle. Chaque
-appel peut demander plusieurs outils. Sur le nœud **Modèle**, l’onglet **Prompt**
-affiche les instructions système, la demande initiale et les schémas des outils
-du tour sélectionné. L’onglet **Exemple d’appel LLM** affiche le corps de la
-requête envoyée à Mistral, avec l’historique des messages et les paramètres de
-génération. La démonstration affiche un exemple au format Mistral. Les anciennes
-traces affichent les messages et les outils disponibles dans la trace.
-Chaque outil a son propre nœud. **Aperçu** décrit son rôle, **Schéma JSON**
-montre sa définition telle qu’elle est présentée au modèle et **Exemple JSON**
-réunit un appel et sa réponse. Le résultat complet de `run_sql` est conservé
-dans ResultStore pendant l’analyse.
+appel peut demander plusieurs outils. Pour le modèle et le juge, **Prompt**
+montre les instructions du tour et **À ce tour précis** affiche la requête
+et la réponse enregistrées.
+Chaque outil a son propre nœud. **Aperçu et gestion du contexte** présente un
+exemple de sortie. **Schéma JSON** montre sa définition et **À ce tour précis**
+affiche la demande et la réponse de l’appel sélectionné. Le résultat complet
+de `run_sql` est conservé dans ResultStore pendant l’analyse.
 
-Le bouton **Importer une trace** charge un fichier `runs/RUN_ID/trace.jsonl`
-dans le navigateur. Le studio est une interface HTML, CSS et JavaScript qui
-relit les exécutions localement. Son ouverture et l’import ne nécessitent
-ni serveur ni clé API.
+Le menu liste les traces du dossier `runs/` et permet de revenir à la trace
+par défaut. Le projet met à jour le catalogue après chaque exécution. Recharge
+le Studio pour voir les nouveaux rapports. Le menu permet aussi d’importer
+un fichier seul. Le Studio relit ces traces localement dans le navigateur.
 
 ## Générer un rapport
 
@@ -58,16 +56,17 @@ Le terminal affiche le chemin du PDF et l’identifiant de la trace. Le fichier
 utilise `Invoke-Item .\rapport.pdf`.
 
 Ajoute `--review-pdf` pour demander une relecture visuelle après la création
-du fichier. La commande envoie à Mistral la question et les images des pages
-finales, par lots de quatre. Mistral Large 4 (`mistral-large-4-0`) signale les
-défauts de mise en page et propose des corrections, sans modifier le PDF.
+du fichier. La commande envoie à Mistral la question et les images du PDF,
+par lots de quatre pages au maximum.
+Mistral Large 4 (`mistral-large-4-0`) signale les défauts de mise en page et
+propose des corrections, sans modifier le PDF.
 `--review-model` permet de choisir un autre modèle multimodal.
 
 Dans le Studio, importe la trace de cette exécution et sélectionne **Juge
-visuel** dans la chronologie. L’onglet **Pages du PDF** affiche les pages du lot
-correspondant. Clique sur une vignette pour l’agrandir. Les images sont conservées dans la
-trace. Si la relecture échoue, le PDF reste disponible et l’erreur apparaît
-dans la trace.
+visuel** dans la chronologie. L’onglet **À ce tour précis** affiche le lot
+examiné et l’avis du juge. Clique sur une vignette pour l’agrandir. Les images
+sont conservées dans la trace. Si la relecture échoue, le PDF reste disponible
+et l’erreur apparaît dans la trace.
 
 Un exemple généré pendant le développement est disponible dans
 `output/pdf/rapport-olist-2017.pdf` sur ce poste. Il compare les avis des
@@ -122,15 +121,15 @@ prévue ou avant avec celles arrivées en retard.
 
 | Appel dans la trace | Ce qui passe à l’étape suivante |
 | --- | --- |
-| `describe_table` | Le schéma des tables utiles à l’analyse. Les règles métier Olist, dont les dates manquantes et les avis multiples, figurent dans le prompt système. |
+| `describe_table` | Les colonnes, leurs types et les clés. Le paramètre facultatif `sample_columns` ajoute jusqu’à trois lignes pour les colonnes demandées. |
 | `run_sql` | Le résultat `r1` à deux lignes. La colonne `note_moyenne` contient **4,28** pour le premier groupe et **2,32** pour le second. |
 | `create_chart` | L’identifiant `c1` du graphique produit localement à partir de `r1`. |
 | `write_report` | Le brouillon associe le tableau `r1` et le graphique `c1` à une section et cite les cellules SQL dans le texte. |
 
-Ce déroulé provient du PDF de démonstration réalisé sur Olist avec un client
-scripté. Le script a demandé les outils dans l’ordre ci-dessus. En utilisation
-normale, Mistral choisit les appels d’outils à partir de la question et des
-réponses déjà reçues.
+Ce tableau illustre les outils disponibles pendant l’analyse. Dans l’exécution
+affichée par le Studio, la requête SQL vérifiée figure dans le prompt système.
+Mistral l’exécute, crée le graphique et rédige le rapport. Le juge relit ensuite
+le PDF.
 
 ### Comment une valeur arrive dans le PDF
 
@@ -258,13 +257,6 @@ Une exécution ordinaire écrit dans `runs/RUN_ID/trace.jsonl`. Les graphiques
 retrouver le rapport proposé. Si la trace vient d’un benchmark, le champ
 `trace_path` du JSON indique son emplacement. `--runs-dir` permet à `replay`
 de retrouver une trace enregistrée dans un dossier personnalisé.
-
-Si la trace de démonstration est présente sur ton poste, cette commande
-affiche les quatre appels du [parcours sur les délais](#parcours-dune-question).
-
-```powershell
-uv run --locked replay 1abfce128b8b4250b960ed2741807d21
-```
 
 ## Évaluation
 

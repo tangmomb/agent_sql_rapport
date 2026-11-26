@@ -4,16 +4,15 @@ import argparse
 import sys
 from collections.abc import Sequence
 from pathlib import Path
+from time import perf_counter
 
 from sql_report_agent.agent.loop import AnalysisAgent
 from sql_report_agent.llm.base import LLMError
-from sql_report_agent.llm.mistral import DEFAULT_MODEL, MistralClient
+from sql_report_agent.llm.mistral import DEFAULT_MODEL, DEFAULT_REVIEW_MODEL, MistralClient
 from sql_report_agent.render.pdf import PdfError, PdfRenderer
 from sql_report_agent.render.review import review_pdf
 from sql_report_agent.tools.sql import SqlTools
 from sql_report_agent.tracing import append_event, replay_run
-
-DEFAULT_REVIEW_MODEL = "mistral-large-4-0"
 
 
 def report(argv: Sequence[str] | None = None) -> None:
@@ -40,10 +39,20 @@ def report(argv: Sequence[str] | None = None) -> None:
         parser.error("--out doit désigner un fichier .pdf.")
     if not args.db.is_file():
         parser.error(f"Base SQLite absente ({args.db}). Lancer make setup.")
+    started_at = perf_counter()
     try:
         renderer = PdfRenderer()
         client = MistralClient(args.model, max_tokens=args.max_output_tokens)
-        judge = MistralClient(args.review_model, max_tokens=1_800) if args.review_pdf else None
+        judge = None
+        if args.review_pdf:
+            review_model = args.review_model
+            large_4 = review_model in {DEFAULT_REVIEW_MODEL, "mistral-large-4"}
+            judge = MistralClient(
+                review_model,
+                max_tokens=3_200 if large_4 else 1_800,
+                timeout_seconds=120 if large_4 else 45,
+                reasoning_effort="low" if large_4 else None,
+            )
         agent = AnalysisAgent(
             client,
             sql=SqlTools(args.db),
@@ -54,7 +63,12 @@ def report(argv: Sequence[str] | None = None) -> None:
         if result.report is None:
             parser.exit(1, f"{result.error} Trace : {result.run_id}\n")
         renderer.write(result.report, args.out)
-        append_event(result.trace_path, "pdf_written", filename=args.out.name)
+        append_event(
+            result.trace_path,
+            "pdf_written",
+            filename=args.out.name,
+            delivery_duration_ms=(perf_counter() - started_at) * 1_000,
+        )
     except (LLMError, OSError, PdfError, ValueError) as error:
         parser.exit(1, f"Rapport impossible : {error}\n")
     print(f"PDF créé : {args.out.resolve()}\nTrace : {result.run_id}")

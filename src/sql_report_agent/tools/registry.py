@@ -55,6 +55,15 @@ def _object_schema(
 
 
 def sql_tools(sql: SqlTools, store: ResultStore) -> tuple[Tool, ...]:
+    def describe_table(arguments: dict[str, object]) -> ToolOutput:
+        table = text_argument(arguments, "table")
+        columns = arguments.get("sample_columns", [])
+        if not isinstance(columns, list) or any(
+            not isinstance(column, str) or not column.strip() for column in columns
+        ):
+            raise ToolArgumentError("sample_columns doit être une liste de noms de colonnes.")
+        return sql.describe_table(table, sample_columns=tuple(columns))
+
     def run_sql(arguments: dict[str, object]) -> ToolOutput:
         result = sql.run_sql(text_argument(arguments, "query"))
         return {"result_id": store.add(result), **result.preview()}
@@ -65,12 +74,25 @@ def sql_tools(sql: SqlTools, store: ResultStore) -> tuple[Tool, ...]:
             lambda _: {"tables": sql.list_tables()},
         ),
         Tool(
-            _sql_spec(
+            ToolSpec(
                 "describe_table",
-                "Décrit les colonnes, les clés et jusqu'à trois exemples.",
-                table="Nom exact de la table ou vue.",
+                "Décrit les colonnes et les clés d'une table ou vue.",
+                _object_schema(
+                    {
+                        "table": {"type": "string", "description": "Nom exact de la table ou vue."},
+                        "sample_columns": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "uniqueItems": True,
+                            "description": (
+                                "Noms exacts des colonnes à montrer sur trois lignes au plus."
+                            ),
+                        },
+                    },
+                    required=["table"],
+                ),
             ),
-            lambda args: sql.describe_table(text_argument(args, "table")),
+            describe_table,
         ),
         Tool(
             _sql_spec(
