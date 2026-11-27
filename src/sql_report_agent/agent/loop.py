@@ -119,13 +119,13 @@ def _elapsed_ms(started_at: float) -> float:
     return (perf_counter() - started_at) * 1_000
 
 
-def _report_sources(call: ToolCall) -> tuple[Counter[tuple[str, ...]], Counter[tuple[str, str]]]:
+def _report_sources(call: ToolCall) -> tuple[set[tuple[str, ...]], Counter[tuple[str, str]]]:
     raw = json.loads(call.arguments)["report"]
     texts = [raw["title"], raw["summary"]]
     for section in raw["sections"]:
         texts.extend((section["heading"], section["text"]))
     return (
-        Counter(reference for value in texts for reference in REFERENCE.findall(value)),
+        {reference for value in texts for reference in REFERENCE.findall(value)},
         Counter(
             (field, section[field])
             for section in raw["sections"]

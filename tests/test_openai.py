@@ -28,8 +28,9 @@ def _text(answer: str) -> dict[str, object]:
     }
 
 
-def test_sol_runs_all_three_roles_through_responses(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize("model_override", [None, openai.SOL_MODEL])
+def test_openai_runs_all_three_roles_through_responses(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, model_override: str | None
 ) -> None:
     monkeypatch.setenv("OPENAI_API_KEY", "test-openai-key")
     monkeypatch.delenv("MISTRAL_API_KEY", raising=False)
@@ -40,6 +41,11 @@ def test_sol_runs_all_three_roles_through_responses(
     payloads = []
     reasoning = {"type": "reasoning", "id": "rs_test", "encrypted_content": "opaque", "summary": []}
     sql = "SELECT 42 AS total"
+    construct_model = model_override or "gpt-6-luna"
+    judge_model = model_override or "gpt-6.1-terra"
+    model_args = (
+        ["--model", model_override, "--review-model", model_override] if model_override else []
+    )
 
     def send(request: Request, *, timeout: float) -> io.BytesIO:
         assert request.full_url == openai.RESPONSES_ENDPOINT
@@ -47,7 +53,10 @@ def test_sol_runs_all_three_roles_through_responses(
         assert request.data is not None and b"test-openai-key" not in request.data
         payload = json.loads(request.data)
         payloads.append(payload)
-        assert payload["model"] == openai.SOL_MODEL and payload["store"] is False
+        expected_model = construct_model if len(payloads) <= 2 else judge_model
+        assert payload["model"] == expected_model and payload["store"] is False
+        assert "reasoning" not in payload
+        assert "max_output_tokens" not in payload
         key = payload["prompt_cache_key"]
         if len(payloads) == 1:
             assert any(tool["name"] == "run_sql" for tool in payload["tools"])
@@ -87,7 +96,7 @@ def test_sol_runs_all_three_roles_through_responses(
             json.dumps(
                 {
                     "status": "completed",
-                    "model": openai.SOL_MODEL,
+                    "model": expected_model,
                     "output": output,
                     "usage": {
                         "input_tokens": 100,
@@ -108,10 +117,7 @@ def test_sol_runs_all_three_roles_through_responses(
             str(pdf),
             "--runs-dir",
             str(runs),
-            "--model",
-            openai.SOL_MODEL,
-            "--review-model",
-            openai.SOL_MODEL,
+            *model_args,
             "--review-data",
             "--review-pdf",
         ]
@@ -124,4 +130,8 @@ def test_sol_runs_all_three_roles_through_responses(
         event for event in events if event["event"] in ("model_call", "data_review", "pdf_review")
     ]
     assert [event["request"] for event in turns] == payloads
-    assert all(event["estimated_cost_usd"] == pytest.approx(0.000196) for event in turns)
+    construct_cost = 0.000196 if model_override else 0.0000101
+    judge_cost = 0.000196 if model_override else 0.000098
+    assert [event["estimated_cost_usd"] for event in turns] == pytest.approx(
+        [construct_cost, construct_cost, judge_cost, judge_cost, judge_cost]
+    )

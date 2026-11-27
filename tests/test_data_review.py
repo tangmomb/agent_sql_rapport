@@ -103,6 +103,8 @@ def test_data_review_corrects_with_real_sql_before_pdf_or_blocks_unproven_issues
     monkeypatch.setattr(mistral, "urlopen", send)
     arguments = [
         "Analyse les retards.",
+        "--model",
+        mistral.DEFAULT_MODEL,
         "--db",
         str(database),
         "--out",
@@ -111,6 +113,8 @@ def test_data_review_corrects_with_real_sql_before_pdf_or_blocks_unproven_issues
         str(runs),
         "--review-data",
         "--review-pdf",
+        "--review-model",
+        mistral.DEFAULT_REVIEW_MODEL,
     ]
     if not valid_evidence:
         with pytest.raises(SystemExit, match="1"):

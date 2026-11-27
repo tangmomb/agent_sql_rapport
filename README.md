@@ -1,17 +1,17 @@
 # Agent d’analyse SQL et de génération de rapports PDF
 
 Pose une question sur les commandes Olist. Le projet produit un PDF avec une
-synthèse, des tableaux et, si la question s’y prête, des graphiques. Mistral
-choisit les requêtes et rédige le rapport. SQLite calcule les chiffres, puis
-Python les insère dans le document.
+synthèse, des tableaux et, si la question s’y prête, des graphiques. Construct
+choisit les requêtes et rédige le rapport avec GPT-6 Luna par défaut. SQLite
+calcule les chiffres, puis Python les insère dans le document.
 
 ## Le projet en quatre étapes
 
 | Étape | Entrée | Sortie |
 | --- | --- | --- |
 | **Préparer** | Le ZIP Olist déposé dans `data/raw/` | Une base SQLite et son dictionnaire dans `data/` |
-| **Analyser** | Ta question et la base locale | Des résultats SQL en mémoire et des aperçus transmis à Mistral |
-| **Produire** | Le brouillon proposé par Mistral et les résultats SQL | Un rapport validé, un PDF et une trace locale |
+| **Analyser** | Ta question et la base locale | Des résultats SQL en mémoire et des aperçus transmis à Construct |
+| **Produire** | Le brouillon proposé par Construct et les résultats SQL | Un rapport validé, un PDF et une trace locale |
 | **Évaluer** | Les 30 questions de référence et leurs réponses attendues | Un tableau de scores et un fichier JSON par campagne |
 
 Pour suivre un cas concret, lis [le parcours d’une question](#parcours-dune-question).
@@ -21,8 +21,9 @@ Pour retrouver les composants dans le dépôt, consulte
 ### Explorer le pipeline dans le navigateur
 
 Ouvre [le studio local](studio/index.html) dans ton navigateur. Au démarrage,
-le Studio affiche une exécution Olist de Mistral avec génération du PDF, relecture
-visuelle, compteurs de tokens et coûts estimés. Clique une étape du graphe pour lire son
+le Studio affiche une exécution Olist avec GPT-6 Luna dans Construct et GPT-6.1 Terra
+pour les deux relectures, avec le PDF, les compteurs de tokens et les coûts estimés.
+Clique une étape du graphe pour lire son
 rôle et ses données, ou utilise les contrôles sous « Carte du pipeline » pour
 suivre les événements dans l’ordre. L’inspecteur affiche un aperçu et le JSON
 de l’événement sélectionné. Sur le nœud **Demande**, l’onglet **Lancement**
@@ -67,8 +68,8 @@ par lots de quatre pages au maximum.
 Si le juge signale un défaut qui gêne la lecture, le modèle d’analyse reçoit
 l’avis dans le même fil et peut rappeler `write_report` une fois. Le PDF révisé
 remplace le PDF initial si le juge valide toutes ses pages.
-Combine `--review-data --review-pdf` pour activer les deux passes. `--review-model`
-choisit le modèle des juges.
+Combine `--review-data --review-pdf` pour activer les deux passes. Les deux juges
+utilisent GPT-6.1 Terra par défaut. `--review-model` permet de choisir un autre modèle.
 `--model gpt-6.2-sol --review-model gpt-6.2-sol` utilise l’API OpenAI pour
 Construct et les deux juges, avec `OPENAI_API_KEY` dans `.env`.
 
@@ -81,9 +82,9 @@ et l’erreur apparaît dans la trace.
 Un exemple généré pendant le développement est disponible dans
 `output/pdf/rapport-olist-2017.pdf` sur ce poste. Il compare les avis des
 commandes livrées à l’heure ou en avance avec ceux des commandes en retard.
-Le modèle par défaut est `deepseek-v4-1-flash-1017`, hébergé par Mistral.
-L’estimation utilise 0,30 USD en entrée, 1,20 USD en sortie et 0,007 USD en entrée
-servie depuis le cache, par million de tokens. La commande
+Construct utilise `gpt-6-luna` par défaut avec `OPENAI_API_KEY` et dispose de
+12 tours avant relecture. Construct et les juges utilisent l’effort de raisonnement
+et les limites de tokens de leur fournisseur. La commande
 `uv run --locked report --help` affiche les réglages possibles.
 
 ### Première installation sur Linux ou Windows
@@ -102,10 +103,11 @@ servie depuis le cache, par million de tokens. La commande
    `data/olist.db` et `data/data_dictionary.md`. La commande `make setup` lance
    le même import si GNU Make est disponible.
 
-2. **Renseigne la clé Mistral.** Si `.env` n’existe pas encore, crée-le avec
+2. **Renseigne les clés API.** Si `.env` n’existe pas encore, crée-le avec
    `cp .env.example .env` sous Linux ou `Copy-Item .env.example .env` sous
-   PowerShell. Complète la ligne `MISTRAL_API_KEY=` dans ton éditeur. Git
-   ignore ce fichier. `--env-file .env` charge la clé pour la commande.
+   PowerShell. Renseigne `OPENAI_API_KEY` pour Construct et les juges par défaut.
+   Ajoute `MISTRAL_API_KEY` si tu choisis un modèle hébergé par Mistral.
+   Git ignore ce fichier. `--env-file .env` charge les clés pour la commande.
 
 Sur un VPS, utilise `uv sync --locked --no-dev` pour installer les seules
 dépendances d’exécution. Ajoute aussi `--no-dev` aux commandes `uv run`
@@ -113,8 +115,8 @@ pour garder cet environnement. ReportLab utilise les polices DejaVu fournies
 par Matplotlib et génère le PDF directement.
 
 Une fois les dépendances installées, l’import, les tests et la vérification des
-références SQL fonctionnent hors ligne. Générer un rapport avec Mistral ou
-lancer son benchmark utilise l’API.
+références SQL fonctionnent hors ligne. Générer un rapport ou lancer le benchmark
+des modèles utilise l’API.
 
 ### Si une commande échoue
 
@@ -122,6 +124,7 @@ lancer son benchmark utilise l’API.
 | --- | --- |
 | PowerShell ne reconnaît pas `uv` | Si `uv` est installé comme module de Python 3.13, remplace `uv` par `py -3.13 -m uv` dans les commandes. |
 | Base SQLite absente | Depuis la racine, exécute la commande d’import de l’étape 1 et vérifie que `data/olist.db` a été créé. |
+| `OPENAI_API_KEY` est absente | Renseigne la clé dans `.env` et lance la commande avec `--env-file .env`. |
 | `MISTRAL_API_KEY` est absente | Vérifie que la ligne dans `.env` contient une valeur et que la commande inclut `--env-file .env`. |
 
 ## Parcours d’une question
@@ -288,11 +291,11 @@ Cette commande rejoue les requêtes fournies avec le projet, compare les répons
 à celles enregistrées dans `evals/expected.json` et vérifie que les variantes
 naïves produisent bien un résultat différent.
 
-### Mesurer les réponses de Mistral
+### Comparer les modèles de génération
 
-Lance un cas pour voir le format de sortie, ou les 30 questions pour obtenir
-le benchmark complet. Le tableau apparaît dans le terminal et le JSON contient
-les résultats par question avec leurs traces.
+Lance un cas pour voir le format de sortie, ou les 30 questions avec GPT-6 Luna
+pour obtenir le benchmark complet. Le tableau apparaît dans le terminal et le
+JSON contient les résultats par question avec leurs traces.
 
 ```powershell
 # Une question
@@ -300,7 +303,17 @@ uv run --locked --env-file .env python -m sql_report_agent.evaluation --case 15-
 
 # Les 30 questions
 uv run --locked --env-file .env python -m sql_report_agent.evaluation --output runs/eval.json
+
+# GPT-5.6 Luna et GPT-6 Luna sur les mêmes questions
+uv run --locked --env-file .env python -m sql_report_agent.evaluation --model gpt-5.6-luna --compare-model gpt-6-luna --output runs/eval-luna.json
+
+# Les cinq scénarios à plusieurs volets
+uv run --locked --env-file .env python -m sql_report_agent.evaluation --questions evals/multi-questions.toml --expected evals/multi-expected.json --output runs/eval-multi.json
 ```
+
+Utilise `OPENAI_API_KEY` pour les modèles OpenAI et `MISTRAL_API_KEY` pour les
+modèles hébergés par Mistral. Le benchmark s’arrête au rapport structuré, avant le rendu PDF et
+les relectures des données et du PDF.
 
 Avec GNU Make et la clé déjà définie dans l’environnement, `make eval` lance
 les 30 questions. `make eval EVAL_ARGS="--check-references"` vérifie seulement
@@ -315,6 +328,11 @@ tokens, entrée puis sortie.
   calculé **par question**. La comparaison respecte la position des colonnes et
   les doublons. L’ordre des lignes et le nom des colonnes sont libres, et les
   nombres flottants sont comparés à six décimales.
+- **Scénarios à plusieurs volets.** Les lignes du détail et des totaux doivent
+  apparaître dans un tableau ou être citées dans le rapport. Des colonnes ou une
+  ligne de total supplémentaires sont acceptées. Les chiffres de la comparaison
+  doivent être cités dans la synthèse. Lire la synthèse permet de contrôler
+  le sens de la conclusion, par exemple quel groupe arrive en tête.
 - **Fidélité des chiffres.** Le contrôle est calculé **par occurrence dans le
   texte**. Une valeur insérée par référence, ou écrite directement et présente
   dans un résultat SQL, passe le contrôle. Répéter trois fois une année compte

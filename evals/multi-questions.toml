@@ -1,0 +1,207 @@
+# Les valeurs de référence gelées sont dans multi-expected.json.
+
+[[case]]
+id = "livraisons-sp-rj"
+question = "Prépare le point logistique sur les commandes livrées achetées en 2017 par les clients de SP et RJ. Pour les commandes dont la date réelle et la date estimée sont renseignées, donne un tableau avec l’État, le nombre de commandes comparables et le nombre de retards. Un retard commence le jour civil suivant la date prévue. Donne aussi le total de commandes comparables et le total de retards pour les deux États réunis. Dans la synthèse, indique quel État a le plus fort taux de retard et de combien de points de pourcentage il dépasse l’autre, arrondi au centième."
+sql = """
+SELECT c.customer_state AS etat, COUNT(*) AS comparables,
+       SUM(DATE(o.order_delivered_customer_date) > DATE(o.order_estimated_delivery_date)) AS retards
+FROM orders o JOIN customers c USING (customer_id)
+WHERE o.order_status = 'delivered' AND c.customer_state IN ('SP', 'RJ')
+  AND o.order_purchase_timestamp >= '2017-01-01' AND o.order_purchase_timestamp < '2018-01-01'
+  AND o.order_delivered_customer_date IS NOT NULL AND o.order_estimated_delivery_date IS NOT NULL
+GROUP BY c.customer_state
+"""
+
+[[case.additional_results]]
+id = "total"
+sql = """
+SELECT COUNT(*) AS comparables,
+       SUM(DATE(o.order_delivered_customer_date) > DATE(o.order_estimated_delivery_date)) AS retards
+FROM orders o JOIN customers c USING (customer_id)
+WHERE o.order_status = 'delivered' AND c.customer_state IN ('SP', 'RJ')
+  AND o.order_purchase_timestamp >= '2017-01-01' AND o.order_purchase_timestamp < '2018-01-01'
+  AND o.order_delivered_customer_date IS NOT NULL AND o.order_estimated_delivery_date IS NOT NULL
+"""
+
+[[case.additional_results]]
+id = "ecart-de-taux"
+in_summary = true
+sql = """
+WITH taux AS (
+    SELECT c.customer_state AS etat,
+           100.0 * AVG(DATE(o.order_delivered_customer_date) >
+                       DATE(o.order_estimated_delivery_date)) AS retard
+    FROM orders o JOIN customers c USING (customer_id)
+    WHERE o.order_status = 'delivered' AND c.customer_state IN ('SP', 'RJ')
+      AND o.order_purchase_timestamp >= '2017-01-01' AND o.order_purchase_timestamp < '2018-01-01'
+      AND o.order_delivered_customer_date IS NOT NULL AND o.order_estimated_delivery_date IS NOT NULL
+    GROUP BY c.customer_state
+)
+SELECT etat, ROUND(retard - (SELECT MIN(retard) FROM taux), 2) AS ecart_points
+FROM taux ORDER BY retard DESC LIMIT 1
+"""
+
+[[case]]
+id = "paiements-trimestre"
+question = "Fais le bilan des paiements des commandes livrées achetées au premier trimestre 2018. Pour chaque mois, affiche le mois au format YYYY-MM, le nombre de commandes distinctes et le total payé en BRL arrondi au centime. Compte chaque ligne de paiement une fois et inclus les commandes sans paiement dans le nombre de commandes. Donne aussi les deux totaux trimestriels, dans le même ordre. Dans la synthèse, indique le mois arrivé en tête par montant payé et l’écart de montant avec le deuxième, en BRL au centime."
+sql = """
+SELECT STRFTIME('%Y-%m', o.order_purchase_timestamp) AS mois,
+       COUNT(DISTINCT o.order_id) AS commandes, ROUND(SUM(p.payment_value), 2) AS montant_brl
+FROM orders o LEFT JOIN order_payments p USING (order_id)
+WHERE o.order_status = 'delivered'
+  AND o.order_purchase_timestamp >= '2018-01-01' AND o.order_purchase_timestamp < '2018-04-01'
+GROUP BY mois
+"""
+
+[[case.additional_results]]
+id = "total"
+sql = """
+SELECT COUNT(DISTINCT o.order_id) AS commandes, ROUND(SUM(p.payment_value), 2) AS montant_brl
+FROM orders o LEFT JOIN order_payments p USING (order_id)
+WHERE o.order_status = 'delivered'
+  AND o.order_purchase_timestamp >= '2018-01-01' AND o.order_purchase_timestamp < '2018-04-01'
+"""
+
+[[case.additional_results]]
+id = "ecart-de-paiements"
+in_summary = true
+sql = """
+WITH mensuel AS (
+    SELECT STRFTIME('%Y-%m', o.order_purchase_timestamp) AS mois, SUM(p.payment_value) AS montant
+    FROM orders o JOIN order_payments p USING (order_id)
+    WHERE o.order_status = 'delivered'
+      AND o.order_purchase_timestamp >= '2018-01-01' AND o.order_purchase_timestamp < '2018-04-01'
+    GROUP BY mois
+), classement AS (
+    SELECT mois, montant, LEAD(montant) OVER (ORDER BY montant DESC, mois) AS suivant FROM mensuel
+)
+SELECT mois, ROUND(montant - suivant, 2) AS ecart_brl
+FROM classement ORDER BY montant DESC, mois LIMIT 1
+"""
+
+[[case]]
+id = "categories-et-port"
+question = "Compare les catégories anglaises bed_bath_table et health_beauty pour les commandes livrées achetées au premier trimestre 2018. Pour chaque catégorie, donne son nom, le nombre de lignes d’articles, le montant des articles hors port, puis le montant du port. Les montants sont en BRL au centime. Donne aussi le nombre total de lignes et le port total des deux catégories. Dans la synthèse, indique quelle catégorie a le port moyen par ligne d’article le plus élevé et l’écart entre les deux moyennes en BRL, arrondi au centime."
+sql = """
+SELECT p.product_category_name_english AS categorie, COUNT(*) AS articles,
+       ROUND(SUM(i.price), 2) AS articles_brl, ROUND(SUM(i.freight_value), 2) AS port_brl
+FROM orders o JOIN order_items i USING (order_id) JOIN products_en p USING (product_id)
+WHERE o.order_status = 'delivered'
+  AND o.order_purchase_timestamp >= '2018-01-01' AND o.order_purchase_timestamp < '2018-04-01'
+  AND p.product_category_name_english IN ('bed_bath_table', 'health_beauty')
+GROUP BY categorie
+"""
+
+[[case.additional_results]]
+id = "total"
+sql = """
+SELECT COUNT(*) AS articles, ROUND(SUM(i.freight_value), 2) AS port_brl
+FROM orders o JOIN order_items i USING (order_id) JOIN products_en p USING (product_id)
+WHERE o.order_status = 'delivered'
+  AND o.order_purchase_timestamp >= '2018-01-01' AND o.order_purchase_timestamp < '2018-04-01'
+  AND p.product_category_name_english IN ('bed_bath_table', 'health_beauty')
+"""
+
+[[case.additional_results]]
+id = "ecart-de-port"
+in_summary = true
+sql = """
+WITH moyennes AS (
+    SELECT p.product_category_name_english AS categorie, AVG(i.freight_value) AS moyenne
+    FROM orders o JOIN order_items i USING (order_id) JOIN products_en p USING (product_id)
+    WHERE o.order_status = 'delivered'
+      AND o.order_purchase_timestamp >= '2018-01-01' AND o.order_purchase_timestamp < '2018-04-01'
+      AND p.product_category_name_english IN ('bed_bath_table', 'health_beauty')
+    GROUP BY categorie
+)
+SELECT categorie, ROUND(moyenne - (SELECT MIN(moyenne) FROM moyennes), 2) AS ecart_brl
+FROM moyennes ORDER BY moyenne DESC LIMIT 1
+"""
+
+[[case]]
+id = "avis-et-ponctualite"
+question = "Analyse les avis pour les commandes livrées achetées en juillet 2017 avec date réelle et date prévue renseignées. Moyenne d’abord les avis d’une même commande, puis donne pour les groupes a_temps et retard le libellé du groupe, le nombre de commandes notées et la moyenne des notes par commande, à trois décimales. Compare les jours civils et classe une livraison effectuée le jour prévu dans a_temps. Donne aussi le nombre total de commandes aux dates renseignées et le nombre total de ces commandes qui ont au moins un avis. Dans la synthèse, indique le groupe le mieux noté et l’écart de note moyenne entre les groupes, arrondi à trois décimales."
+sql = """
+WITH notes AS (
+    SELECT order_id, AVG(review_score) AS note FROM order_reviews GROUP BY order_id
+)
+SELECT CASE WHEN DATE(o.order_delivered_customer_date) > DATE(o.order_estimated_delivery_date)
+            THEN 'retard' ELSE 'a_temps' END AS groupe,
+       COUNT(*) AS commandes_notees, ROUND(AVG(n.note), 3) AS note
+FROM orders o JOIN notes n USING (order_id)
+WHERE o.order_status = 'delivered'
+  AND o.order_purchase_timestamp >= '2017-07-01' AND o.order_purchase_timestamp < '2017-08-01'
+  AND o.order_delivered_customer_date IS NOT NULL AND o.order_estimated_delivery_date IS NOT NULL
+GROUP BY groupe
+"""
+
+[[case.additional_results]]
+id = "total"
+sql = """
+SELECT COUNT(*) AS comparables,
+       SUM(EXISTS(SELECT 1 FROM order_reviews r WHERE r.order_id = o.order_id)) AS notees
+FROM orders o
+WHERE o.order_status = 'delivered'
+  AND o.order_purchase_timestamp >= '2017-07-01' AND o.order_purchase_timestamp < '2017-08-01'
+  AND o.order_delivered_customer_date IS NOT NULL AND o.order_estimated_delivery_date IS NOT NULL
+"""
+
+[[case.additional_results]]
+id = "ecart-de-note"
+in_summary = true
+sql = """
+WITH notes AS (
+    SELECT order_id, AVG(review_score) AS note FROM order_reviews GROUP BY order_id
+), moyennes AS (
+    SELECT CASE WHEN DATE(o.order_delivered_customer_date) > DATE(o.order_estimated_delivery_date)
+                THEN 'retard' ELSE 'a_temps' END AS groupe, AVG(n.note) AS moyenne
+    FROM orders o JOIN notes n USING (order_id)
+    WHERE o.order_status = 'delivered'
+      AND o.order_purchase_timestamp >= '2017-07-01' AND o.order_purchase_timestamp < '2017-08-01'
+      AND o.order_delivered_customer_date IS NOT NULL
+      AND o.order_estimated_delivery_date IS NOT NULL
+    GROUP BY groupe
+)
+SELECT groupe, ROUND(moyenne - (SELECT MIN(moyenne) FROM moyennes), 3) AS ecart_note
+FROM moyennes ORDER BY moyenne DESC LIMIT 1
+"""
+
+[[case]]
+id = "vendeurs-et-couverture"
+question = "Dresse un bilan des vendeurs des États SP, PR, MG et RJ pour les commandes livrées achetées en 2017. Par État du vendeur, affiche son code, le nombre de vendeurs ayant vendu au moins un article, le nombre de commandes distinctes auxquelles ils ont contribué et le nombre de lignes d’articles. Donne aussi le total de vendeurs actifs et le total de commandes distinctes pour ces quatre États. Dans la synthèse, indique l’État qui a le plus de vendeurs actifs et combien il en compte de plus que le deuxième."
+sql = """
+SELECT s.seller_state AS etat, COUNT(DISTINCT i.seller_id) AS vendeurs,
+       COUNT(DISTINCT i.order_id) AS commandes, COUNT(*) AS articles
+FROM orders o JOIN order_items i USING (order_id) JOIN sellers s USING (seller_id)
+WHERE o.order_status = 'delivered' AND s.seller_state IN ('SP', 'PR', 'MG', 'RJ')
+  AND o.order_purchase_timestamp >= '2017-01-01' AND o.order_purchase_timestamp < '2018-01-01'
+GROUP BY s.seller_state
+"""
+
+[[case.additional_results]]
+id = "total"
+sql = """
+SELECT COUNT(DISTINCT i.seller_id) AS vendeurs, COUNT(DISTINCT i.order_id) AS commandes
+FROM orders o JOIN order_items i USING (order_id) JOIN sellers s USING (seller_id)
+WHERE o.order_status = 'delivered' AND s.seller_state IN ('SP', 'PR', 'MG', 'RJ')
+  AND o.order_purchase_timestamp >= '2017-01-01' AND o.order_purchase_timestamp < '2018-01-01'
+"""
+
+[[case.additional_results]]
+id = "ecart-de-vendeurs"
+in_summary = true
+sql = """
+WITH effectifs AS (
+    SELECT s.seller_state AS etat, COUNT(DISTINCT i.seller_id) AS vendeurs
+    FROM orders o JOIN order_items i USING (order_id) JOIN sellers s USING (seller_id)
+    WHERE o.order_status = 'delivered' AND s.seller_state IN ('SP', 'PR', 'MG', 'RJ')
+      AND o.order_purchase_timestamp >= '2017-01-01' AND o.order_purchase_timestamp < '2018-01-01'
+    GROUP BY s.seller_state
+), classement AS (
+    SELECT etat, vendeurs, LEAD(vendeurs) OVER (ORDER BY vendeurs DESC, etat) AS suivant
+    FROM effectifs
+)
+SELECT etat, vendeurs - suivant AS ecart_vendeurs
+FROM classement ORDER BY vendeurs DESC, etat LIMIT 1
+"""

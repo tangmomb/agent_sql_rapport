@@ -58,6 +58,8 @@ class PreparedReport:
     sections: tuple[ReportSection, ...]
     audit: NumberAudit
     result_ids: tuple[str, ...] = ()
+    summary_references: tuple[tuple[str, str, int], ...] = ()
+    references: tuple[tuple[str, str, int], ...] = ()
 
 
 def format_value(value: SqlValue) -> str:
@@ -116,6 +118,7 @@ class _Prose:
         self.numeric_references = 0
         self.literals: dict[str, list[str]] = {}
         self.result_ids: dict[str, None] = {}
+        self.references: dict[tuple[str, str, int], None] = {}
 
     def substitute(self, text: str, field: str) -> str:
         output = []
@@ -143,6 +146,7 @@ class _Prose:
                 )
             value = result.rows[row_index][column_index]
             self.result_ids[result_id] = None
+            self.references[result_id, column, row_index] = None
             self.numeric_references += int(_decimal(value) is not None)
             formatted = format_value(value)
             if len(formatted) > 300:
@@ -185,7 +189,8 @@ def prepare_report(raw: object, results: ResultStore, charts: ChartStore) -> Pre
 
     prose = _Prose(results)
     title = prose.substitute(_text(report["title"], "Titre", 220), "Titre")
-    summary = prose.substitute(_text(report["summary"], "Synthèse", 2_400), "Synthèse")
+    summary_source = _text(report["summary"], "Synthèse", 2_400)
+    summary = prose.substitute(summary_source, "Synthèse")
     rendered = []
     visual_results: dict[str, None] = {}
     for index, raw_section in enumerate(sections, start=1):
@@ -222,5 +227,14 @@ def prepare_report(raw: object, results: ResultStore, charts: ChartStore) -> Pre
             )
         )
     return PreparedReport(
-        title, summary, tuple(rendered), prose.audit(), tuple(prose.result_ids | visual_results)
+        title,
+        summary,
+        tuple(rendered),
+        prose.audit(),
+        tuple(prose.result_ids | visual_results),
+        tuple(
+            (result_id, column, int(row))
+            for result_id, column, row in REFERENCE.findall(summary_source)
+        ),
+        tuple(prose.references),
     )

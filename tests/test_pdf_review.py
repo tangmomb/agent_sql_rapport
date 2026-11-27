@@ -106,7 +106,9 @@ def _verdicts(pages: list[int], verdict: str = "lisible") -> str:
     )
 
 
-@pytest.mark.parametrize("outcome", ["accepted", "rejected", "changed_number", "already_readable"])
+@pytest.mark.parametrize(
+    "outcome", ["accepted", "repeated_reference", "rejected", "changed_number", "already_readable"]
+)
 def test_review_can_resume_construct_and_preserve_initial_pdf(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, outcome: str
 ) -> None:
@@ -122,6 +124,8 @@ def test_review_can_resume_construct_and_preserve_initial_pdf(
         payload = json.loads(request.data)
         payloads.append(payload)
         turn = len(payloads)
+        assert "reasoning_effort" not in payload
+        assert "max_tokens" not in payload
         if "tools" in payload:
             if turn == 1:
                 name = "run_sql"
@@ -130,11 +134,14 @@ def test_review_can_resume_construct_and_preserve_initial_pdf(
                 name = "write_report"
                 title = "Rapport initial" if turn == 2 else "Rapport révisé"
                 column = "autre" if turn == 4 and outcome == "changed_number" else "total"
+                section_text = "Résultat de l’analyse."
+                if turn == 4 and outcome == "repeated_reference":
+                    section_text += " Le total est {{r1.total[0]}}."
                 arguments = {
                     "report": {
                         "title": title,
                         "summary": f"La valeur est {{{{r1.{column}[0]}}}}.",
-                        "sections": [{"heading": "Analyse", "text": "Résultat de l’analyse."}],
+                        "sections": [{"heading": "Analyse", "text": section_text}],
                     }
                 }
             message = {
@@ -155,6 +162,8 @@ def test_review_can_resume_construct_and_preserve_initial_pdf(
     report(
         [
             "Analyse.",
+            "--model",
+            mistral.DEFAULT_MODEL,
             "--db",
             str(database),
             "--out",
@@ -164,6 +173,8 @@ def test_review_can_resume_construct_and_preserve_initial_pdf(
             "--max-steps",
             "2",
             "--review-pdf",
+            "--review-model",
+            mistral.DEFAULT_REVIEW_MODEL,
         ]
     )
     trace = next(runs.glob("*/trace.jsonl"))
@@ -176,7 +187,8 @@ def test_review_can_resume_construct_and_preserve_initial_pdf(
     assert initial_review["prompt_cache_key"] == f"{cache_key}-judge"
     assert events[-1]["event"] == "run_end"
     text = PdfReader(output).pages[0].extract_text()
-    assert ("Rapport révisé" if outcome == "accepted" else "Rapport initial") in text
+    accepted = outcome in {"accepted", "repeated_reference"}
+    assert ("Rapport révisé" if accepted else "Rapport initial") in text
     assert "42" in text
     decisions = [event for event in events if event["event"] == "pdf_revision"]
     if outcome == "already_readable":
@@ -184,7 +196,7 @@ def test_review_can_resume_construct_and_preserve_initial_pdf(
         assert events[-1]["steps"] == 2
         return
 
-    assert [decision["accepted"] for decision in decisions] == [outcome == "accepted"]
+    assert [decision["accepted"] for decision in decisions] == [accepted]
     revision = payloads[3]
     assert revision["model"] == payloads[0]["model"]
     assert revision["prompt_cache_key"] == cache_key

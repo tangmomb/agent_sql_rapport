@@ -9,9 +9,11 @@ from tempfile import TemporaryDirectory
 from time import perf_counter
 
 from sql_report_agent.agent.loop import AnalysisAgent, ReviseReport
+from sql_report_agent.llm import DEFAULT_CONSTRUCT_MODEL, construct_client
 from sql_report_agent.llm.base import LLMError, RunScopedClient
-from sql_report_agent.llm.mistral import DEFAULT_MODEL, DEFAULT_REVIEW_MODEL, MistralClient
-from sql_report_agent.llm.openai import SOL_MODEL, OpenAIClient
+from sql_report_agent.llm.mistral import DEFAULT_REVIEW_MODEL, MistralClient
+from sql_report_agent.llm.openai import STANDARD_PRICING as OPENAI_PRICING
+from sql_report_agent.llm.openai import TERRA_MODEL, OpenAIClient
 from sql_report_agent.render.pdf import PdfError, PdfRenderer
 from sql_report_agent.render.review import review_pdf
 from sql_report_agent.tools.report import PreparedReport
@@ -89,13 +91,16 @@ def report(argv: Sequence[str] | None = None) -> None:
     parser = argparse.ArgumentParser(prog="report", description="Produire un rapport SQL en PDF.")
     parser.add_argument("question", help="Demande d'analyse en langage naturel.")
     parser.add_argument("--out", type=Path, required=True, help="Chemin de sortie du PDF.")
-    parser.add_argument("--model", default=DEFAULT_MODEL)
+    parser.add_argument(
+        "--model",
+        default=DEFAULT_CONSTRUCT_MODEL,
+        help="Modèle de Construct (par défaut, %(default)s).",
+    )
     parser.add_argument("--db", type=Path, default=Path("data/olist.db"))
     parser.add_argument("--runs-dir", type=Path, default=Path("runs"))
     parser.add_argument(
         "--max-steps", type=int, default=12, help="Nombre maximal de tours avant relecture."
     )
-    parser.add_argument("--max-output-tokens", type=int, default=3_000)
     parser.add_argument(
         "--review-data", action="store_true", help="Vérifier la synthèse dans SQLite avant le PDF."
     )
@@ -104,8 +109,8 @@ def report(argv: Sequence[str] | None = None) -> None:
     )
     parser.add_argument(
         "--review-model",
-        default=DEFAULT_REVIEW_MODEL,
-        help=f"Modèle des juges (par défaut : {DEFAULT_REVIEW_MODEL}).",
+        default=TERRA_MODEL,
+        help="Modèle des juges (par défaut, %(default)s).",
     )
     args = parser.parse_args(argv)
     if not args.question.strip():
@@ -117,23 +122,17 @@ def report(argv: Sequence[str] | None = None) -> None:
     started_at = perf_counter()
     try:
         renderer = PdfRenderer()
-        client = (
-            OpenAIClient(max_tokens=args.max_output_tokens)
-            if args.model == SOL_MODEL
-            else MistralClient(args.model, max_tokens=args.max_output_tokens)
-        )
+        client = construct_client(args.model)
         judge: RunScopedClient | None = None
         if args.review_pdf or args.review_data:
             review_model = args.review_model
             large_4 = review_model in {DEFAULT_REVIEW_MODEL, "mistral-large-4"}
             judge = (
-                OpenAIClient(max_tokens=3_200)
-                if review_model == SOL_MODEL
+                OpenAIClient(review_model)
+                if review_model in OPENAI_PRICING
                 else MistralClient(
                     review_model,
-                    max_tokens=3_200 if large_4 else 1_800,
                     timeout_seconds=120 if large_4 else 45,
-                    reasoning_effort="low" if large_4 else None,
                 )
             )
         agent = AnalysisAgent(

@@ -25,9 +25,11 @@ MISTRAL_ENDPOINT = "https://api.mistral.ai/v1/chat/completions"
 DEFAULT_MODEL = "deepseek-v4-1-flash-1017"
 DEFAULT_REVIEW_MODEL = "mistral-large-4-0"
 _LARGE_4_PRICING = TokenPricing(0.70, 2.10, cached_input_usd_per_million=0.07)
+_SMALL_4_PRICING = TokenPricing(0.15, 0.60, cached_input_usd_per_million=0.015)
 STANDARD_PRICING = {
     DEFAULT_MODEL: TokenPricing(0.30, 1.20, cached_input_usd_per_million=0.007),
-    "mistral-small-2603": TokenPricing(0.15, 0.60, cached_input_usd_per_million=0.015),
+    "mistral-small-2603": _SMALL_4_PRICING,
+    "mistral-small-latest": _SMALL_4_PRICING,
     DEFAULT_REVIEW_MODEL: _LARGE_4_PRICING,
     "mistral-large-4": _LARGE_4_PRICING,
 }
@@ -100,20 +102,18 @@ class MistralClient:
         self,
         model: str = DEFAULT_MODEL,
         *,
-        max_tokens: int = 1024,
         timeout_seconds: float = 45.0,
         reasoning_effort: str | None = None,
     ) -> None:
         api_key = os.environ.get("MISTRAL_API_KEY", "").strip()
         if not api_key:
             raise LLMError("La variable d'environnement MISTRAL_API_KEY est absente.")
-        if not model.strip() or max_tokens < 1:
-            raise ValueError("Renseigner un modèle et une limite de sortie positive.")
+        if not model.strip():
+            raise ValueError("Renseigner un modèle.")
         if not math.isfinite(timeout_seconds) or timeout_seconds <= 0:
             raise ValueError("Le délai HTTP doit être positif et fini.")
         self._api_key = api_key
         self.model = model
-        self.max_tokens = max_tokens
         self.timeout_seconds = timeout_seconds
         self.reasoning_effort = reasoning_effort
         self._prompt_cache_key: str | None = None
@@ -127,7 +127,6 @@ class MistralClient:
         payload: dict[str, object] = {
             "model": self.model,
             "messages": [message.to_payload() for message in messages],
-            "max_tokens": self.max_tokens,
             "temperature": 0,
         }
         if tools:

@@ -3,24 +3,35 @@
 import argparse
 import json
 import math
+import re
 import sys
 import tomllib
 from collections import Counter
 from collections.abc import Sequence
 from dataclasses import asdict, dataclass
 from hashlib import sha256
+from itertools import product
 from pathlib import Path
 from statistics import mean, median
 from tempfile import NamedTemporaryFile
 
 from sql_report_agent.agent.loop import AgentResult, AnalysisAgent
+from sql_report_agent.llm import DEFAULT_CONSTRUCT_MODEL, construct_client
 from sql_report_agent.llm.base import LLMError, TokenPricing
-from sql_report_agent.llm.mistral import DEFAULT_MODEL, MistralClient
-from sql_report_agent.tools.report import NumberAudit
-from sql_report_agent.tools.sql import SqlRow, SqlToolError, SqlTools, SqlValue
+from sql_report_agent.tools.report import NumberAudit, _decimal
+from sql_report_agent.tools.sql import SqlResult, SqlRow, SqlToolError, SqlTools, SqlValue
 
 COMPARISON_DECIMALS = 6
 REFERENCE_TIMEOUT_SECONDS = 20.0
+
+
+@dataclass(frozen=True, slots=True)
+class AdditionalResult:
+    id: str
+    sql: str
+    columns: tuple[str, ...]
+    expected_rows: tuple[SqlRow, ...]
+    in_summary: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -33,8 +44,11 @@ class Case:
     trap: str | None = None
     naive_sql: str | None = None
     naive_rows: tuple[SqlRow, ...] | None = None
+    additional_results: tuple[AdditionalResult, ...] = ()
 
     def prompt(self) -> str:
+        if self.additional_results:
+            return self.question
         columns = ", ".join(self.columns)
         return (
             f"{self.question}\n\n"
@@ -55,7 +69,6 @@ class Configuration:
     name: str
     model: str
     max_steps: int
-    max_output_tokens: int
     pricing: TokenPricing | None = None
 
 
@@ -89,6 +102,7 @@ class CaseScore:
     run_id: str
     trace_path: str
     error: str | None
+    unmatched_results: tuple[str, ...] = ()
 
     @property
     def figure_fidelity(self) -> float | None:
@@ -110,6 +124,37 @@ def _read_rows(raw: object, width: int) -> tuple[SqlRow, ...]:
     return tuple(rows)
 
 
+def _read_result(
+    frozen: dict[str, object], label: str
+) -> tuple[tuple[str, ...], tuple[SqlRow, ...]]:
+    columns = frozen["columns"]
+    if (
+        not isinstance(columns, list)
+        or not columns
+        or any(not isinstance(column, str) or not column.strip() for column in columns)
+        or len(set(columns)) != len(columns)
+    ):
+        raise ValueError(f"{label} : noms de colonnes attendues invalides.")
+    return tuple(columns), _read_rows(frozen["rows"], len(columns))
+
+
+def _read_additional_results(
+    items: list[dict], frozen: dict, case_id: str
+) -> tuple[AdditionalResult, ...]:
+    ids = [item["id"] for item in items]
+    if len(ids) != len(set(ids)) or set(ids) != frozen.keys():
+        raise ValueError(f"{case_id} : identifiants de résultats complémentaires incohérents.")
+    results = []
+    for item in items:
+        result_id = item["id"]
+        columns, rows = _read_result(frozen[result_id], f"{case_id}/{result_id}")
+        in_summary = item.get("in_summary", False)
+        if type(in_summary) is not bool or (in_summary and len(rows) != 1):
+            raise ValueError(f"{case_id}/{result_id} : une conclusion doit tenir sur une ligne.")
+        results.append(AdditionalResult(result_id, item["sql"], columns, rows, in_summary))
+    return tuple(results)
+
+
 def load_suite(questions_path: Path, expected_path: Path) -> Suite:
     questions_bytes = questions_path.read_bytes()
     expected_bytes = expected_path.read_bytes()
@@ -122,9 +167,7 @@ def load_suite(questions_path: Path, expected_path: Path) -> Suite:
     for item in questions:
         case_id = item["id"]
         frozen = expected[case_id]
-        columns = tuple(frozen["columns"])
-        if not columns or len(set(columns)) != len(columns) or not all(map(str.strip, columns)):
-            raise ValueError(f"{case_id} : noms de colonnes attendues invalides.")
+        columns, rows = _read_result(frozen, case_id)
         trap = item.get("trap")
         naive_sql = item.get("naive_sql")
         if bool(trap) != bool(naive_sql) or bool(trap) != ("naive_rows" in frozen):
@@ -135,10 +178,15 @@ def load_suite(questions_path: Path, expected_path: Path) -> Suite:
                 item["question"],
                 item["sql"],
                 columns,
-                _read_rows(frozen["rows"], len(columns)),
+                rows,
                 trap,
                 naive_sql,
                 _read_rows(frozen["naive_rows"], len(columns)) if trap else None,
+                _read_additional_results(
+                    item.get("additional_results", []),
+                    frozen.get("additional_results", {}),
+                    case_id,
+                ),
             )
         )
     fingerprint = sha256(questions_bytes + b"\0" + expected_bytes).hexdigest()
@@ -172,6 +220,12 @@ def check_references(cases: Sequence[Case], sql: SqlTools) -> list[ReferenceChec
                     error = error or "Le piège ne change plus le résultat."
                 elif not rows_match(naive.rows, case.naive_rows):
                     error = error or "Résultat naïf différent du résultat gelé."
+            for required in case.additional_results:
+                result = sql.run_sql(required.sql)
+                if result.columns != required.columns or not rows_match(
+                    result.rows, required.expected_rows
+                ):
+                    error = error or f"Référence complémentaire différente : {required.id}."
         except SqlToolError as failure:
             error = str(failure)
         checks.append(
@@ -196,22 +250,117 @@ def _count_numbers(audit: NumberAudit | None) -> tuple[int, int]:
     )
 
 
+def _report_cell(value: SqlValue) -> SqlValue:
+    if isinstance(value, str) and (number := _decimal(value)) is not None:
+        value = int(number) if number == number.to_integral_value() else float(number)
+    return _normalized_cell(value)
+
+
+def _contains_rows(
+    result: SqlResult,
+    expected: tuple[SqlRow, ...],
+    cited_cells: set[tuple[str, int]] | None,
+) -> bool:
+    if not expected:
+        return not result.rows
+    if len(result.rows) < len(expected):
+        return False
+    actual = [tuple(map(_report_cell, row)) for row in result.rows]
+    required = [tuple(map(_report_cell, row)) for row in expected]
+    actual_columns = [Counter(column) for column in zip(*actual, strict=True)]
+    candidates = [
+        tuple(i for i, actual_column in enumerate(actual_columns) if values <= actual_column)
+        for values in (Counter(column) for column in zip(*required, strict=True))
+    ]
+    expected_rows = Counter(required)
+    for indices in product(*candidates):
+        if len(set(indices)) != len(indices):
+            continue
+        visible_rows = Counter(
+            tuple(row[i] for i in indices)
+            for row_index, row in enumerate(actual)
+            if cited_cells is None
+            or all((result.columns[i], row_index) in cited_cells for i in indices)
+        )
+        if expected_rows <= visible_rows:
+            return True
+    return False
+
+
+def _summary_matches(check: AdditionalResult, result: AgentResult) -> tuple[str, ...]:
+    if result.report is None:
+        return ()
+    matches = []
+    required = Counter(map(_report_cell, check.expected_rows[0]))
+    actual: Counter[SqlValue] = Counter()
+    for result_id, column, row in dict.fromkeys(result.report.summary_references):
+        sql = result.store.get(result_id)
+        value = _report_cell(sql.rows[row][sql.columns.index(column)])
+        if value in required:
+            actual[value] += 1
+            matches.append(result_id)
+    for value, count in (required - actual).items():
+        if not isinstance(value, str):
+            return ()
+        mentions = re.findall(rf"(?<!\w){re.escape(value)}(?!\w)", result.report.summary, re.I)
+        if len(mentions) < count:
+            return ()
+    return tuple(matches)
+
+
+def _table_matches(check: AdditionalResult, result: AgentResult) -> tuple[str, ...]:
+    report = result.report
+    if report is None:
+        return ()
+    cited: dict[str, set[tuple[str, int]]] = {}
+    for result_id, column, row in report.references:
+        cited.setdefault(result_id, set()).add((column, row))
+    matches = []
+    for result_id in report.result_ids:
+        sql = result.store.get(result_id)
+        cells = (
+            None
+            if any(section.table is sql for section in report.sections)
+            else cited.get(result_id, set())
+        )
+        if _contains_rows(sql, check.expected_rows, cells):
+            matches.append(result_id)
+    return tuple(matches)
+
+
 def score_case(case: Case, result: AgentResult) -> CaseScore:
     report = result.report if result.status == "completed" else None
     used = report.result_ids if report is not None else ()
-    matched = tuple(
-        result_id
-        for result_id in used
-        if len(result.store.get(result_id).columns) == len(case.columns)
-        and rows_match(result.store.get(result_id).rows, case.expected_rows)
+    checks = (
+        AdditionalResult("principal", case.sql, case.columns, case.expected_rows),
+        *case.additional_results,
     )
+    matched: dict[str, None] = {}
+    unmatched = []
+    for check in checks:
+        if report is None:
+            matches = ()
+        elif check.in_summary:
+            matches = _summary_matches(check, result)
+        elif case.additional_results:
+            matches = _table_matches(check, result)
+        else:
+            matches = tuple(
+                result_id
+                for result_id in used
+                if len(result.store.get(result_id).columns) == len(check.columns)
+                and rows_match(result.store.get(result_id).rows, check.expected_rows)
+            )
+        if not matches:
+            unmatched.append(check.id)
+        matched.update(dict.fromkeys(matches))
     supported, total = _count_numbers(report.audit if report else None)
     return CaseScore(
         id=case.id,
         status=result.status,
-        correct=bool(matched),
+        correct=not unmatched,
         trap=case.trap is not None,
-        matched_result_ids=matched,
+        matched_result_ids=tuple(matched),
         report_result_ids=used,
         supported_numbers=supported,
         total_numbers=total,
@@ -225,6 +374,7 @@ def score_case(case: Case, result: AgentResult) -> CaseScore:
         run_id=result.run_id,
         trace_path=str(result.trace_path),
         error=result.error,
+        unmatched_results=tuple(unmatched),
     )
 
 
@@ -355,9 +505,12 @@ def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
     parser.add_argument("--runs-dir", type=Path, default=Path("runs"))
     parser.add_argument("--output", type=Path, default=Path("runs/eval.json"))
     parser.add_argument("--case", action="append", help="Identifiant à sélectionner (répétable).")
-    parser.add_argument("--model", default=DEFAULT_MODEL)
+    parser.add_argument(
+        "--model",
+        default=DEFAULT_CONSTRUCT_MODEL,
+        help="Modèle de Construct (par défaut, %(default)s).",
+    )
     parser.add_argument("--compare-model")
-    parser.add_argument("--max-output-tokens", type=int, default=3_000)
     parser.add_argument("--max-steps", type=int, default=12)
     price_help = "Tarifs USD par million de tokens (entrée, sortie)."
     parser.add_argument(
@@ -374,15 +527,14 @@ def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
 
 def _configurations(args: argparse.Namespace) -> list[Configuration]:
     pricing = TokenPricing(*args.price) if args.price is not None else None
-    shared = (args.max_steps, args.max_output_tokens)
-    configs = [Configuration("A", args.model, *shared, pricing)]
+    configs = [Configuration("A", args.model, args.max_steps, pricing)]
     if args.compare_model is not None or args.compare_price is not None:
         model = args.compare_model or args.model
         if args.compare_price is not None:
             other_pricing = TokenPricing(*args.compare_price)
         else:
             other_pricing = pricing if model == args.model else None
-        configs.append(Configuration("B", model, *shared, other_pricing))
+        configs.append(Configuration("B", model, args.max_steps, other_pricing))
     return configs
 
 
@@ -444,7 +596,7 @@ def _main(args: argparse.Namespace) -> int:
     summaries = []
     configs = _configurations(args)
     for config in configs:
-        client = MistralClient(config.model, max_tokens=config.max_output_tokens)
+        client = construct_client(config.model)
         agent = AnalysisAgent(
             client,
             sql=SqlTools(args.db),

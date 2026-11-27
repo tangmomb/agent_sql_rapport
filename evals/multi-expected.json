@@ -1,0 +1,250 @@
+{
+  "livraisons-sp-rj": {
+    "columns": [
+      "etat",
+      "comparables",
+      "retards"
+    ],
+    "rows": [
+      [
+        "RJ",
+        5968,
+        624
+      ],
+      [
+        "SP",
+        17070,
+        650
+      ]
+    ],
+    "additional_results": {
+      "total": {
+        "columns": [
+          "comparables",
+          "retards"
+        ],
+        "rows": [
+          [
+            23038,
+            1274
+          ]
+        ]
+      },
+      "ecart-de-taux": {
+        "columns": [
+          "etat",
+          "ecart_points"
+        ],
+        "rows": [
+          [
+            "RJ",
+            6.65
+          ]
+        ]
+      }
+    }
+  },
+  "paiements-trimestre": {
+    "columns": [
+      "mois",
+      "commandes",
+      "montant_brl"
+    ],
+    "rows": [
+      [
+        "2018-01",
+        7069,
+        1078606.86
+      ],
+      [
+        "2018-02",
+        6555,
+        966510.88
+      ],
+      [
+        "2018-03",
+        7003,
+        1120678.0
+      ]
+    ],
+    "additional_results": {
+      "total": {
+        "columns": [
+          "commandes",
+          "montant_brl"
+        ],
+        "rows": [
+          [
+            20627,
+            3165795.74
+          ]
+        ]
+      },
+      "ecart-de-paiements": {
+        "columns": [
+          "mois",
+          "ecart_brl"
+        ],
+        "rows": [
+          [
+            "2018-03",
+            42071.14
+          ]
+        ]
+      }
+    }
+  },
+  "categories-et-port": {
+    "columns": [
+      "categorie",
+      "articles",
+      "articles_brl",
+      "port_brl"
+    ],
+    "rows": [
+      [
+        "bed_bath_table",
+        2298,
+        203560.77,
+        39951.03
+      ],
+      [
+        "health_beauty",
+        1925,
+        240470.72,
+        34017.84
+      ]
+    ],
+    "additional_results": {
+      "total": {
+        "columns": [
+          "articles",
+          "port_brl"
+        ],
+        "rows": [
+          [
+            4223,
+            73968.87
+          ]
+        ]
+      },
+      "ecart-de-port": {
+        "columns": [
+          "categorie",
+          "ecart_brl"
+        ],
+        "rows": [
+          [
+            "health_beauty",
+            0.29
+          ]
+        ]
+      }
+    }
+  },
+  "avis-et-ponctualite": {
+    "columns": [
+      "groupe",
+      "commandes_notees",
+      "note"
+    ],
+    "rows": [
+      [
+        "a_temps",
+        3737,
+        4.315
+      ],
+      [
+        "retard",
+        105,
+        2.238
+      ]
+    ],
+    "additional_results": {
+      "total": {
+        "columns": [
+          "comparables",
+          "notees"
+        ],
+        "rows": [
+          [
+            3872,
+            3842
+          ]
+        ]
+      },
+      "ecart-de-note": {
+        "columns": [
+          "groupe",
+          "ecart_note"
+        ],
+        "rows": [
+          [
+            "a_temps",
+            2.077
+          ]
+        ]
+      }
+    }
+  },
+  "vendeurs-et-couverture": {
+    "columns": [
+      "etat",
+      "vendeurs",
+      "commandes",
+      "articles"
+    ],
+    "rows": [
+      [
+        "MG",
+        154,
+        4111,
+        4627
+      ],
+      [
+        "PR",
+        203,
+        3049,
+        3419
+      ],
+      [
+        "RJ",
+        90,
+        1673,
+        1842
+      ],
+      [
+        "SP",
+        1002,
+        30623,
+        35065
+      ]
+    ],
+    "additional_results": {
+      "total": {
+        "columns": [
+          "vendeurs",
+          "commandes"
+        ],
+        "rows": [
+          [
+            1449,
+            39322
+          ]
+        ]
+      },
+      "ecart-de-vendeurs": {
+        "columns": [
+          "etat",
+          "ecart_vendeurs"
+        ],
+        "rows": [
+          [
+            "SP",
+            799
+          ]
+        ]
+      }
+    }
+  }
+}

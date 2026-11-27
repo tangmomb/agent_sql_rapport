@@ -143,6 +143,236 @@
         <div id="inspector" class="inspector"></div>
       </aside>
     </section>
+    <section class="benchmark-section" aria-labelledby="benchmark-title">
+      <header class="benchmark-header">
+        <h2 id="benchmark-title">Benchmark des modèles dans le rôle Construct</h2>
+        <p id="benchmark-note">Campagne du 27 novembre 2026 sur 30 questions Olist, dont 14 cas avec piège, et 5 scénarios à plusieurs volets. Effort de raisonnement par défaut et 12 tours maximum par question.
+          Le benchmark s’arrête au rapport structuré, avant les relectures et le rendu du PDF.</p>
+      </header>
+      <div class="panel benchmark-scroll" role="region" aria-labelledby="benchmark-title" tabindex="0">
+        <table class="benchmark-table" aria-labelledby="benchmark-title" aria-describedby="benchmark-note">
+          <thead>
+            <tr>
+              <th scope="col">Modèle</th>
+              <th scope="col">
+                Exactitude SQL
+                <span class="benchmark-help">
+                  <button type="button" aria-label="À propos de l’exactitude SQL" aria-describedby="benchmark-accuracy">?</button>
+                  <span id="benchmark-accuracy" class="benchmark-tooltip" role="tooltip">Part des 30 questions dont le rapport utilise un résultat SQL qui correspond aux valeurs attendues.</span>
+                </span>
+              </th>
+              <th scope="col">
+                Pièges SQL
+                <span class="benchmark-help">
+                  <button type="button" aria-label="À propos des pièges SQL" aria-describedby="benchmark-traps">?</button>
+                  <span id="benchmark-traps" class="benchmark-tooltip" role="tooltip">Exactitude SQL sur les 14 questions qui ciblent des erreurs fréquentes, comme les doubles comptages après une jointure.</span>
+                </span>
+              </th>
+              <th scope="col">
+                Scénarios complets
+                <span class="benchmark-help">
+                  <button type="button" aria-label="À propos des scénarios complets" aria-describedby="benchmark-multi">?</button>
+                  <span id="benchmark-multi" class="benchmark-tooltip" role="tooltip">Sur cinq demandes à plusieurs volets, le détail, les totaux et la conclusion de la synthèse doivent tous être corrects.</span>
+                </span>
+              </th>
+              <th scope="col">
+                Fidélité des chiffres
+                <span class="benchmark-help">
+                  <button type="button" aria-label="À propos de la fidélité des chiffres" aria-describedby="benchmark-fidelity">?</button>
+                  <span id="benchmark-fidelity" class="benchmark-tooltip" role="tooltip">Part des occurrences numériques du texte que l’audit peut rattacher à un résultat SQL.</span>
+                </span>
+              </th>
+              <th scope="col">
+                Latence médiane
+                <span class="benchmark-help">
+                  <button type="button" aria-label="À propos de la latence médiane" aria-describedby="benchmark-latency">?</button>
+                  <span id="benchmark-latency" class="benchmark-tooltip" role="tooltip">Durée médiane d’une exécution de Construct, appels au modèle et aux outils compris.</span>
+                </span>
+              </th>
+              <th scope="col">
+                Coût estimé (USD)
+                <span class="benchmark-help">
+                  <button type="button" aria-label="À propos du coût estimé" aria-describedby="benchmark-cost">?</button>
+                  <span id="benchmark-cost" class="benchmark-tooltip" role="tooltip">Coût total estimé des appels à Construct sur les 30 questions, selon les tokens consommés et les tarifs du modèle.</span>
+                </span>
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr class="benchmark-group"><th scope="rowgroup" colspan="7">Mistral</th></tr>
+            <tr>
+              <th scope="row">
+                <code>mistral-large-4-0</code> <span class="benchmark-price">(0,70 $, 2,10 $, 1 M)</span>
+              </th>
+              <td>29/30</td><td>14/14</td><td>5/5</td><td>100 %</td><td>35,22 s</td><td>0,3093</td>
+            </tr>
+            <tr>
+              <th scope="row">
+                <code>deepseek-v4-1-flash-1017</code> <span class="benchmark-price">(0,30 $, 1,20 $, 1 M)</span>
+              </th>
+              <td>25/30</td><td>12/14</td><td>5/5</td><td>100 %</td><td>12,38 s</td><td>0,1013</td>
+            </tr>
+            <tr>
+              <th scope="row">
+                <code>mistral-small-latest</code> <span class="benchmark-price">(0,15 $, 0,60 $, 1 M)</span>
+              </th>
+              <td>17/30</td><td>8/14</td><td>0/5</td><td>100 %</td><td>10,53 s</td><td>0,0482</td>
+            </tr>
+          </tbody>
+          <tbody>
+            <tr class="benchmark-group"><th scope="rowgroup" colspan="7">OpenAI</th></tr>
+            <tr>
+              <th scope="row">
+                <code>gpt-6.1-terra</code> <span class="benchmark-price">(1 $, 5 $, 1 M)</span>
+              </th>
+              <td>28/30</td><td>12/14</td><td>5/5</td><td>100 %</td><td>16,71 s</td><td>0,1543</td>
+            </tr>
+            <tr>
+              <th scope="row">
+                <code>gpt-5.6-luna</code> <span class="benchmark-price">(0,20 $, 1,20 $, 1 M)</span>
+              </th>
+              <td>30/30</td><td>14/14</td><td>5/5</td><td>100 %</td><td>12,72 s</td><td>0,0488</td>
+            </tr>
+            <tr>
+              <th scope="row">
+                <code>gpt-6-luna</code> <span class="benchmark-price">(0,10 $, 0,50 $, 1 M)</span>
+                <span class="benchmark-default">Par défaut dans Construct</span>
+              </th>
+              <td>30/30</td><td>14/14</td><td>5/5</td><td>100 %</td><td>9,33 s</td><td>0,0212</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+    <section class="benchmark-section" aria-labelledby="judge-benchmark-title">
+      <header class="benchmark-header">
+        <h2 id="judge-benchmark-title">Benchmark des modèles dans les rôles de juge</h2>
+        <p id="judge-benchmark-note">Dix cas par rôle, dont cinq synthèses erronées et cinq PDF avec défaut. GPT‑6 Luna a produit les révisions des PDF.</p>
+      </header>
+      <div class="panel benchmark-scroll" role="region" aria-labelledby="judge-benchmark-title" tabindex="0">
+        <table class="benchmark-table judge-benchmark-table" aria-labelledby="judge-benchmark-title" aria-describedby="judge-benchmark-note">
+          <colgroup span="1"></colgroup>
+          <colgroup span="4"></colgroup>
+          <colgroup span="5" class="judge-visual-columns"></colgroup>
+          <thead>
+            <tr>
+              <th scope="col" rowspan="2">Modèle</th>
+              <th scope="colgroup" colspan="4">Juge des données</th>
+              <th scope="colgroup" colspan="5">Juge visuel</th>
+            </tr>
+            <tr>
+              <th scope="col">
+                Erreurs prouvées
+                <span class="benchmark-help">
+                  <button type="button" aria-label="Juge des données · Erreurs prouvées" aria-describedby="judge-data-detection">?</button>
+                  <span id="judge-data-detection" class="benchmark-tooltip" role="tooltip">Part des erreurs attendues que le juge signale et appuie sur un résultat SQL pertinent.</span>
+                </span>
+              </th>
+              <th scope="col">
+                Fausses alertes
+                <span class="benchmark-help">
+                  <button type="button" aria-label="Juge des données · Fausses alertes" aria-describedby="judge-data-false-positive">?</button>
+                  <span id="judge-data-false-positive" class="benchmark-tooltip" role="tooltip">Part des synthèses correctes que le juge demande de corriger.</span>
+                </span>
+              </th>
+              <th scope="col">
+                Latence médiane
+                <span class="benchmark-help">
+                  <button type="button" aria-label="Juge des données · Latence médiane" aria-describedby="judge-data-latency">?</button>
+                  <span id="judge-data-latency" class="benchmark-tooltip" role="tooltip">Temps médian passé dans les appels au modèle pour une relecture des données.</span>
+                </span>
+              </th>
+              <th scope="col">
+                Coût (USD)
+                <span class="benchmark-help">
+                  <button type="button" aria-label="Juge des données · Coût (USD)" aria-describedby="judge-data-cost">?</button>
+                  <span id="judge-data-cost" class="benchmark-tooltip" role="tooltip">Coût total estimé des appels au juge des données sur les cas évalués.</span>
+                </span>
+              </th>
+              <th scope="col">
+                Défauts localisés
+                <span class="benchmark-help">
+                  <button type="button" aria-label="Juge visuel · Défauts localisés" aria-describedby="judge-visual-detection">?</button>
+                  <span id="judge-visual-detection" class="benchmark-tooltip" role="tooltip">Part des défauts attendus que le juge repère et situe dans le PDF.</span>
+                </span>
+              </th>
+              <th scope="col">
+                Fausses alertes
+                <span class="benchmark-help">
+                  <button type="button" aria-label="Juge visuel · Fausses alertes" aria-describedby="judge-visual-false-positive">?</button>
+                  <span id="judge-visual-false-positive" class="benchmark-tooltip" role="tooltip">Part des PDF lisibles que le juge demande de corriger.</span>
+                </span>
+              </th>
+              <th scope="col">
+                Corrections validées
+                <span class="benchmark-help">
+                  <button type="button" aria-label="Juge visuel · Corrections validées" aria-describedby="judge-visual-revision">?</button>
+                  <span id="judge-visual-revision" class="benchmark-tooltip" role="tooltip">Part des PDF avec défaut dont la révision corrige le défaut et préserve les données du rapport.</span>
+                </span>
+              </th>
+              <th scope="col">
+                Latence médiane
+                <span class="benchmark-help">
+                  <button type="button" aria-label="Juge visuel · Latence médiane" aria-describedby="judge-visual-latency">?</button>
+                  <span id="judge-visual-latency" class="benchmark-tooltip" role="tooltip">Durée médiane de la première relecture visuelle d’un PDF.</span>
+                </span>
+              </th>
+              <th scope="col">
+                Coût (USD)
+                <span class="benchmark-help">
+                  <button type="button" aria-label="Juge visuel · Coût (USD)" aria-describedby="judge-visual-cost">?</button>
+                  <span id="judge-visual-cost" class="benchmark-tooltip" role="tooltip">Coût total estimé des premières relectures visuelles sur les cas évalués.</span>
+                </span>
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr class="benchmark-group"><th scope="rowgroup" colspan="10">Mistral</th></tr>
+            <tr>
+              <th scope="row"><code>mistral-large-4-0</code></th>
+              <td>2/5</td><td>0/5</td><td>25,66 s</td><td>0,0454</td>
+              <td>4/5</td><td>0/5</td><td>3/5</td><td>19,60 s</td><td>0,0485</td>
+            </tr>
+            <tr>
+              <th scope="row"><code>deepseek-v4-1-flash-1017</code></th>
+              <td>4/5</td><td>0/5</td><td>1,99 s</td><td>0,0053</td>
+              <td>5/5</td><td>0/5</td><td>4/5</td><td>2,03 s</td><td>0,0063</td>
+            </tr>
+            <tr>
+              <th scope="row"><code>mistral-small-latest</code></th>
+              <td>2/5</td><td>0/5</td><td>1,31 s</td><td>0,0021</td>
+              <td>2/5</td><td>1/5</td><td>3/5</td><td>1,40 s</td><td>0,0052</td>
+            </tr>
+          </tbody>
+          <tbody>
+            <tr class="benchmark-group"><th scope="rowgroup" colspan="10">OpenAI</th></tr>
+            <tr>
+              <th scope="row">
+                <code>gpt-6.1-terra</code>
+                <span class="benchmark-default">Par défaut pour les deux juges</span>
+              </th>
+              <td>5/5</td><td>0/5</td><td>5,78 s</td><td>0,0255</td>
+              <td>5/5</td><td>0/5</td><td>4/5</td><td>2,14 s</td><td>0,0398</td>
+            </tr>
+            <tr>
+              <th scope="row"><code>gpt-5.6-luna</code></th>
+              <td>4/5</td><td>0/5</td><td>5,24 s</td><td>0,0084</td>
+              <td>3/5</td><td>0/5</td><td>3/5</td><td>2,48 s</td><td>0,0087</td>
+            </tr>
+            <tr>
+              <th scope="row"><code>gpt-6-luna</code></th>
+              <td>4/5</td><td>0/5</td><td>3,54 s</td><td>0,0038</td>
+              <td>5/5</td><td>0/5</td><td>4/5</td><td>2,24 s</td><td>0,0045</td>
+            </tr>
+            <tr>
+              <th scope="row"><code>gpt-6.2-sol</code></th>
+              <td>5/5</td><td>0/5</td><td>5,37 s</td><td>0,0499</td>
+              <td>5/5</td><td>0/5</td><td>3/5</td><td>2,87 s</td><td>0,0815</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
     <footer class="page-footer"><span>Agent SQL · Olist</span><span>Les traces importées sont lues dans ce navigateur.</span></footer>
   </main>
   <dialog id="review-dialog" aria-labelledby="review-page-title">

@@ -67,14 +67,14 @@ def test_mistral_round_trip(
         assert request.data is not None
         payload = json.loads(request.data)
         assert payload["model"] == mistral.DEFAULT_MODEL
-        assert payload["max_tokens"] == 500
+        assert "max_tokens" not in payload
         assert payload["messages"] == [message.to_payload() for message in messages]
         assert payload["tools"] == [tool.to_payload() for tool in tools]
         assert "prompt_cache_key" not in payload
         return io.BytesIO(json.dumps(body).encode())
 
     monkeypatch.setattr(mistral, "urlopen", send)
-    client = mistral.MistralClient(timeout_seconds=3, max_tokens=500)
+    client = mistral.MistralClient(timeout_seconds=3)
     result = client.chat(messages, tools)
     assert result.message.tool_calls == (
         ToolCall("def123456", "describe_table", '{"table":"orders"}'),
@@ -122,7 +122,7 @@ def test_run_traces_exact_mistral_request(
         return io.BytesIO(b'{"choices":[{"message":{"content":"Analyse"}}]}')
 
     monkeypatch.setattr(mistral, "urlopen", send)
-    client = mistral.MistralClient("requested-model", max_tokens=731)
+    client = mistral.MistralClient("requested-model")
     agent = AnalysisAgent(client, runs_dir=tmp_path)
     result = agent.run("Analyse.")
     next_run = agent.run("Analyse.")
@@ -130,7 +130,7 @@ def test_run_traces_exact_mistral_request(
     records = map(json.loads, result.trace_path.read_text(encoding="utf-8").splitlines())
     event = next(record for record in records if record["event"] == "model_call")
     assert event["request"] == sent[0]
-    assert event["request"]["max_tokens"] == 731
+    assert "max_tokens" not in event["request"]
     assert event["request"]["prompt_cache_key"] == f"sql-report-{result.run_id}"
     assert sent[1]["prompt_cache_key"] == f"sql-report-{next_run.run_id}"
     assert sent[1]["prompt_cache_key"] != sent[0]["prompt_cache_key"]

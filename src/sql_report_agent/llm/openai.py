@@ -1,4 +1,4 @@
-"""Adaptateur Responses pour GPT-6.2 Sol, texte, outils et images."""
+"""Adaptateur Responses pour les modèles OpenAI, texte, outils et images."""
 
 import json
 import os
@@ -21,25 +21,34 @@ from sql_report_agent.llm.base import (
 )
 
 SOL_MODEL = "gpt-6.2-sol"
+TERRA_MODEL = "gpt-6.1-terra"
 RESPONSES_ENDPOINT = "https://api.openai.com/v1/responses"
+STANDARD_PRICING = {
+    SOL_MODEL: (2.0, 10.0, 0.10),
+    TERRA_MODEL: (1.0, 5.0, 0.05),
+    "gpt-5.6-terra": (2.0, 12.0, 0.20),
+    "gpt-5.6-luna": (0.20, 1.20, 0.02),
+    "gpt-6-luna": (0.10, 0.50, 0.01),
+}
 
 
 @dataclass(frozen=True, slots=True)
-class SolPricing(TokenPricing):
+class OpenAIPricing(TokenPricing):
     cache_write_tokens: int = 0
 
     def estimate_usd(self, usage: TokenUsage) -> float:
-        return TokenPricing.estimate_usd(self, usage) + self.cache_write_tokens * 0.50 / 1_000_000
+        surcharge = self.input_usd_per_million * 0.25 * self.cache_write_tokens / 1_000_000
+        return TokenPricing.estimate_usd(self, usage) + surcharge
 
 
 class OpenAIClient:
-    model = SOL_MODEL
-
-    def __init__(self, *, max_tokens: int = 3_000, timeout_seconds: float = 90) -> None:
+    def __init__(self, model: str = SOL_MODEL, *, timeout_seconds: float = 90) -> None:
         self._key = os.environ.get("OPENAI_API_KEY", "").strip()
         if not self._key:
             raise LLMError("La variable d’environnement OPENAI_API_KEY est absente.")
-        self.max_tokens = max_tokens
+        if model not in STANDARD_PRICING:
+            raise ValueError(f"Modèle OpenAI non pris en charge : {model}.")
+        self.model = model
         self.timeout_seconds = timeout_seconds
         self._cache_key: str | None = None
         self._by_message: dict[int, tuple[Message, list[dict[str, object]]]] = {}
@@ -94,8 +103,6 @@ class OpenAIClient:
         payload: dict[str, object] = {
             "model": self.model,
             "input": self._input(messages),
-            "reasoning": {"effort": "low"},
-            "max_output_tokens": self.max_tokens,
             "service_tier": "default",
             "store": False,
         }
@@ -150,7 +157,9 @@ class OpenAIClient:
             usage = TokenUsage(
                 metrics["input_tokens"], metrics["output_tokens"], details.get("cached_tokens", 0)
             )
-            pricing = SolPricing(2, 10, 0.10, details.get("cache_write_tokens", 0))
+            pricing = OpenAIPricing(
+                *STANDARD_PRICING[self.model], details.get("cache_write_tokens", 0)
+            )
             incomplete = (result.get("incomplete_details") or {}).get("reason")
             finish = (
                 ("tool_calls" if calls else "stop")
